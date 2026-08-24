@@ -285,8 +285,12 @@ export class ConversationViewer implements Component {
   }
 
   private invocationLine(): string | undefined {
-    const { modelName, tags } = buildInvocationTags(this.record.invocation);
-    const parts = modelName ? [modelName, ...tags] : tags;
+    // Canonical id here, short label everywhere else: this overlay is opened to
+    // inspect one agent and has the width for it, and two providers can serve
+    // models whose short names read alike.
+    const { modelName, modelId, tags } = buildInvocationTags(this.record.invocation);
+    const model = modelId ?? modelName;
+    const parts = model ? [model, ...tags] : tags;
     if (parts.length === 0) return undefined;
     return this.theme.fg("dim", `  ↳ ${parts.join(" · ")}`);
   }

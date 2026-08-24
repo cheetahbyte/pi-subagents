@@ -75,6 +75,51 @@ beforeEach(() => {
   wrapOverride = null;
 });
 
+describe("ConversationViewer invocation line", () => {
+  /** The `↳` metadata row for a record, or "" when the viewer renders none. */
+  function invocationLine(invocation: AgentRecord["invocation"]): string {
+    const viewer = new ConversationViewer(
+      mockTui(30, 200), mockSession([]), mockRecord({ invocation }), undefined,
+      { fg: (_c: string, t: string) => t, bold: (t: string) => t } as any,
+      vi.fn(),
+    );
+    // The row arrives inside the overlay's frame, padded out to the right
+    // border; what is under test is the metadata it carries.
+    const row = viewer.render(200).find(l => l.includes("↳"));
+    return row ? row.slice(row.indexOf("↳")).replace(/\s*│\s*$/, "") : "";
+  }
+
+  // The canonical id, not the short label the widget uses: this overlay is
+  // opened to inspect one agent and has the width to disambiguate providers.
+  it("names the model with its provider", () => {
+    expect(invocationLine({
+      modelName: "sonnet 4.6",
+      modelId: "anthropic/claude-sonnet-4-6",
+      thinking: "high",
+      maxTurns: 60,
+    })).toBe("↳ anthropic/claude-sonnet-4-6 · thinking: high · max turns: 60");
+  });
+
+  it("falls back to the short label when no canonical id was captured", () => {
+    expect(invocationLine({ modelName: "sonnet 4.6", thinking: "high" }))
+      .toBe("↳ sonnet 4.6 · thinking: high");
+  });
+
+  it("discloses a model and level the run did not honor", () => {
+    expect(invocationLine({
+      modelName: "haiku 4.5",
+      modelId: "anthropic/claude-haiku-4-5",
+      requestedModel: "google/gemini-3-pro",
+      thinking: "low",
+      requestedThinking: "max",
+    })).toBe("↳ anthropic/claude-haiku-4-5 (asked google/gemini-3-pro) · thinking: low (asked max)");
+  });
+
+  it("renders no row at all for a record with no invocation", () => {
+    expect(invocationLine(undefined)).toBe("");
+  });
+});
+
 describe("ConversationViewer cost display", () => {
   /** The header line, with a cost of `cost` on the record and showCost `on`. */
   function header(on: boolean, cost: number): string {

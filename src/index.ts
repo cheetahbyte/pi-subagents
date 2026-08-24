@@ -28,7 +28,7 @@ import { GroupJoinManager } from "./group-join.js";
 import { isolationParam, resolveAgentInvocationConfig, resolveJoinMode } from "./invocation-config.js";
 import { describeMention, handleBase, isReservedHandle, parseMention, resolveHandleToType, stripAgentPrefix } from "./mention.js";
 import { runMentionClone } from "./mention-clone.js";
-import { type ModelRegistry, resolveModel } from "./model-resolver.js";
+import { describeModel, type ModelRegistry, resolveModel } from "./model-resolver.js";
 import { checkModelScope, isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.js";
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
 import { createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
@@ -383,6 +383,10 @@ export default function (pi: ExtensionAPI) {
   let showCost = false;
   function isShowCostEnabled(): boolean { return showCost; }
   function setShowCost(b: boolean): void { showCost = b; widget.update(); fleet.update(); }
+  /** Name the model and thinking level on the widget's running rows. */
+  let showModel = false;
+  function isShowModelEnabled(): boolean { return showModel; }
+  function setShowModel(b: boolean): void { showModel = b; widget.update(); }
   const pendingUsage = new PendingUsagePool();
 
   // ---- Cancellable pending notifications ----
@@ -1044,6 +1048,7 @@ export default function (pi: ExtensionAPI) {
     agentActivity,
     getWidgetMode,
     isShowCostEnabled,
+    isShowModelEnabled,
     (value) => pi.events.emit("pi-footer:update-widget", { widgetId: "subagents", value }),
   );
   function setWidgetMode(m: WidgetMode): void { widgetMode = m; widget.update(); }
@@ -1316,6 +1321,7 @@ export default function (pi: ExtensionAPI) {
       setFallbackSubagent: setFallbackSubagent,
       setReportUsage,
       setShowCost,
+      setShowModel,
     },
     (event, payload) => pi.events.emit(event, payload),
   );
@@ -1738,15 +1744,32 @@ Terse command-style prompts produce shallow, generic work.
         writeInitialEntry(rec.outputFile, agentId, params.prompt, ctx.cwd);
       };
 
-      const parentModelId = ctx.model?.id;
-      const effectiveModelId = model?.id;
-      const modelName = effectiveModelId && effectiveModelId !== parentModelId
-        ? (model?.name ?? effectiveModelId).replace(/^Claude\s+/i, "").toLowerCase()
-        : undefined;
+      // Unconditional, not "only when it differs from the parent": a thinking
+      // level reads as a property of a model, and an agent that inherited the
+      // parent's model used to show the level with nothing to attach it to.
+      // This is the pre-session snapshot — agent-manager overwrites it with the
+      // effective values the moment a session reports them.
+      const { modelName, modelId } = model ? describeModel(model) : { modelName: undefined, modelId: undefined };
+      // What the caller SPELLED, kept only if it names a different model than the
+      // one that won. Model input is fuzzy — `"haiku"` and
+      // `"anthropic/claude-haiku-4-5"` are the same model — so comparing the two
+      // strings would disclose an override that never happened. A spelling that
+      // resolves to nothing is still worth disclosing: it cannot have taken effect.
+      const askedModel = ((asked: string | undefined) => {
+        if (!asked) return undefined;
+        const resolvedAsked = resolveModel(asked, ctx.modelRegistry);
+        if (typeof resolvedAsked === "string") return asked;
+        return resolvedAsked.provider === model?.provider && resolvedAsked.id === model?.id ? undefined : asked;
+      })(resolvedConfig.overridden?.model);
       const effectiveMaxTurns = normalizeMaxTurns(resolvedConfig.maxTurns ?? getDefaultMaxTurns());
       const agentInvocation: AgentInvocation = {
         modelName,
+        modelId,
         thinking,
+        // Only set where the agent file outranked the caller, so the surfaces can
+        // disclose a parameter that was accepted but could not take effect (#182).
+        requestedThinking: resolvedConfig.overridden?.thinking,
+        requestedModel: askedModel,
         // Explicit value only — the default fallback would just add noise.
         // Normalize so `0` (unlimited) doesn't surface as a misleading "max turns: 0".
         maxTurns: normalizeMaxTurns(resolvedConfig.maxTurns),
@@ -1765,6 +1788,34 @@ Terse command-style prompts produce shallow, generic work.
         subagentType,
         modelName,
         tags: agentTags.length > 0 ? agentTags : undefined,
+      };
+
+      /**
+       * `detailBase` for a record that exists, which outranks it: the base is a
+       * snapshot of what this call REQUESTED, and pi may have resolved a
+       * different model or clamped the thinking level (agent-manager writes the
+       * effective values back when the session reports them). Resume goes
+       * further and ignores the model/thinking parameters outright — it runs on
+       * the session it is reopening — so rendering the base there advertises
+       * settings the run never used.
+       *
+       * The mode label is rebuilt rather than carried over: it hangs off the
+       * agent TYPE, not the invocation, so tags taken straight from
+       * buildInvocationTags would silently drop `twin`.
+       */
+      const detailBaseFor = (rec: AgentRecord | undefined): typeof detailBase => {
+        if (!rec?.invocation) return detailBase;
+        const type = rec.type;
+        const { modelName: recModelName, tags } = buildInvocationTags(rec.invocation);
+        const recModeLabel = getPromptModeLabel(type);
+        const recTags = recModeLabel ? [recModeLabel, ...tags] : tags;
+        return {
+          displayName: getDisplayName(type),
+          description: rec.description,
+          subagentType: type,
+          modelName: recModelName,
+          tags: recTags.length > 0 ? recTags : undefined,
+        };
       };
 
       // ---- Schedule: register a job, don't spawn now ----
@@ -1856,7 +1907,7 @@ Terse command-style prompts produce shallow, generic work.
             (isQueued ? `Position: queued (max ${manager.getMaxConcurrent()} concurrent)\n` : "") +
             `\nYou will be notified when this agent completes.\n` +
             `Use get_subagent_result to retrieve full results, or steer_subagent to send it messages.`,
-            { ...detailBase, subagentType: existing.type, displayName: existing.type, toolUses: record.toolUses, tokens: "", durationMs: 0, status: "background" as const, agentId: id },
+            { ...detailBaseFor(record), toolUses: record.toolUses, tokens: "", durationMs: 0, status: "background" as const, agentId: id },
           );
         }
 
@@ -1867,11 +1918,11 @@ Terse command-style prompts produce shallow, generic work.
         // A failed resume surfaces the error, plus any partial output THIS
         // resume produced (never the previous turn's answer, #144).
         if (record.status === "error") {
-          return textResult(`Agent failed: ${record.error}${partialOutputSuffix(record)}`, buildDetails(detailBase, record));
+          return textResult(`Agent failed: ${record.error}${partialOutputSuffix(record)}`, buildDetails(detailBaseFor(record), record));
         }
         return textResult(
           record.result?.trim() || "No output.",
-          buildDetails(detailBase, record),
+          buildDetails(detailBaseFor(record), record),
         );
       }
 
@@ -1956,7 +2007,7 @@ Terse command-style prompts produce shallow, generic work.
           `\nYou will be notified when this agent completes.\n` +
           `Use get_subagent_result to retrieve full results, or steer_subagent to send it messages.\n` +
           `Do not duplicate this agent's work.`,
-          { ...detailBase, toolUses: 0, tokens: "", durationMs: 0, status: "background" as const, agentId: id },
+          { ...detailBaseFor(record), toolUses: 0, tokens: "", durationMs: 0, status: "background" as const, agentId: id },
         );
       }
 
@@ -1971,7 +2022,7 @@ Terse command-style prompts produce shallow, generic work.
         // assistant message — so nothing is spent while this reads zero.
         const fgRecord = fgId ? manager.getRecord(fgId) : undefined;
         const details: AgentDetails = {
-          ...detailBase,
+          ...detailBaseFor(fgRecord),
           toolUses: fgState.toolUses,
           tokens: fgRecord ? formatLifetimeTokens(fgRecord) : "",
           cost: fgRecord ? getLifetimeCost(fgRecord.lifetimeUsage) : 0,
@@ -2061,7 +2112,7 @@ Terse command-style prompts produce shallow, generic work.
       // two describe the same work when the agent delegated to nested children.
       const tokenText = formatLifetimeTokens(record);
 
-      const details = buildDetails(detailBase, record, fgState, { tokens: tokenText });
+      const details = buildDetails(detailBaseFor(record), record, fgState, { tokens: tokenText });
 
       if (record.status === "error") {
         // Error headline + any partial output the run produced before failing.
@@ -2837,6 +2888,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
       fallbackSubagent: getFallbackSubagent(),
       reportUsage: isReportUsageEnabled(),
       showCost: isShowCostEnabled(),
+      showModel: isShowModelEnabled(),
     } satisfies SubagentsSettings;
   }
 
@@ -2974,6 +3026,14 @@ Write the file using the write tool. Only write the file, nothing else.`;
           description:
             "Show an estimated `~$0.0042` beside subagent token counts in the widget, fleet view, results and notifications. Priced by pi from the model's rates — omitted entirely for a model it has no rates for.",
           currentValue: isShowCostEnabled() ? "on" : "off",
+          values: ["on", "off"],
+        },
+        {
+          id: "showModel",
+          label: "Show model",
+          description:
+            "Name the model driving each agent, and the thinking level it is running at, on the widget's running rows. The Agent tool result and the conversation viewer show the pair either way — this adds it to the widget, where the row is already dense.",
+          currentValue: isShowModelEnabled() ? "on" : "off",
           values: ["on", "off"],
         },
         {
@@ -3120,6 +3180,10 @@ Write the file using the write tool. Only write the file, nothing else.`;
         const enabled = value === "on";
         setShowCost(enabled);
         notifyApplied(ctx, `Cost display ${enabled ? "enabled" : "disabled"}`);
+      } else if (id === "showModel") {
+        const enabled = value === "on";
+        setShowModel(enabled);
+        notifyApplied(ctx, `Model display ${enabled ? "enabled" : "disabled"}`);
       } else if (id === "fleetView") {
         const enabled = value === "on";
         setFleetViewEnabled(enabled);

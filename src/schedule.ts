@@ -19,6 +19,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Cron } from "croner";
 import { nanoid } from "nanoid";
 import type { AgentManager } from "./agent-manager.js";
+import { normalizeMaxTurns } from "./agent-runner.js";
 import { resolveSpawnType } from "./agent-types.js";
 import { resolveModel } from "./model-resolver.js";
 import type { ScheduleStore } from "./schedule-store.js";
@@ -256,6 +257,20 @@ export class SubagentScheduler {
         isolated: job.isolated,
         thinkingLevel: job.thinking,
         isolation: job.isolation,
+        // A scheduled run has no tool call to build this, so without it the
+        // conversation viewer shows nothing about how the job was configured.
+        // The model is left out on purpose: agent-manager fills in the effective
+        // one when the session reports it, and naming the pre-session pick here
+        // would only be right until then.
+        invocation: {
+          thinking: job.thinking,
+          // Normalized like the Agent tool's own snapshot: `0` means unlimited,
+          // and rendering it as "max turns: 0" would read as a limit of none.
+          maxTurns: normalizeMaxTurns(job.max_turns),
+          isolated: job.isolated,
+          runInBackground: true,
+          isolation: job.isolation,
+        },
       });
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);

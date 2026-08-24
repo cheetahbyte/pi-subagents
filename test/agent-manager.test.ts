@@ -2036,3 +2036,110 @@ describe("AgentManager — names as additive aliases", () => {
     expect(manager.getRecord(id)!.sessionFile).toBeUndefined();
   });
 });
+
+describe("AgentManager — effective model and thinking write-back", () => {
+  let manager: AgentManager;
+
+  afterEach(() => {
+    manager?.dispose?.();
+    vi.restoreAllMocks();
+  });
+
+  /** Run a spawn whose session reports the given runtime model/level. */
+  async function spawnWithSession(
+    invocation: AgentRecord["invocation"],
+    runtime: { model?: { provider: string; id: string; name?: string }; thinkingLevel?: string },
+  ): Promise<AgentRecord> {
+    vi.mocked(runAgent).mockImplementation(async (_ctx: any, _type: any, _prompt: any, options: any) => {
+      options.onSessionCreated?.({ dispose: vi.fn(), ...runtime });
+      return { responseText: "done", session: mockSession(), aborted: false, steered: false } as any;
+    });
+    manager = new AgentManager();
+    const id = manager.spawn(mockPi, mockCtx, "Explore", "go", {
+      description: "go",
+      isBackground: true,
+      invocation,
+    });
+    await manager.getRecord(id)!.promise;
+    return manager.getRecord(id)!;
+  }
+
+  it("relabels the record with the model the session actually runs", async () => {
+    const record = await spawnWithSession(
+      { modelName: "pre-session", modelId: "pre/session", thinking: "high" },
+      { model: { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" }, thinkingLevel: "high" },
+    );
+
+    expect(record.invocation).toMatchObject({
+      modelName: "sonnet 4.6",
+      modelId: "anthropic/claude-sonnet-4-6",
+      thinking: "high",
+    });
+  });
+
+  it("keeps the requested level when pi clamps it to what the model supports", async () => {
+    const record = await spawnWithSession(
+      { thinking: "max" },
+      { model: { provider: "anthropic", id: "claude-haiku-4-5" }, thinkingLevel: "high" },
+    );
+
+    expect(record.invocation!.thinking).toBe("high");
+    expect(record.invocation!.requestedThinking).toBe("max");
+  });
+
+  it("records no request when the level was honored", async () => {
+    const record = await spawnWithSession(
+      { thinking: "high" },
+      { model: { provider: "anthropic", id: "claude-haiku-4-5" }, thinkingLevel: "high" },
+    );
+
+    expect(record.invocation!.requestedThinking).toBeUndefined();
+  });
+
+  it("does not overwrite a request the agent file already overrode", async () => {
+    // Frontmatter pinned `low` over a caller's `max`, then the model clamped it
+    // again. The caller asked for `max` — that is what the surfaces must say,
+    // not the intermediate value frontmatter chose.
+    const record = await spawnWithSession(
+      { thinking: "low", requestedThinking: "max" },
+      { model: { provider: "anthropic", id: "claude-haiku-4-5" }, thinkingLevel: "minimal" },
+    );
+
+    expect(record.invocation!.thinking).toBe("minimal");
+    expect(record.invocation!.requestedThinking).toBe("max");
+  });
+
+  it("gives a spawn that carried no invocation one to display", async () => {
+    // Cross-extension RPC and `@handle` spawns pass none, and used to render no
+    // metadata at all.
+    const record = await spawnWithSession(
+      undefined,
+      { model: { provider: "openai-codex", id: "gpt-5.6-sol" }, thinkingLevel: "xhigh" },
+    );
+
+    expect(record.invocation).toEqual({
+      modelName: "gpt-5.6-sol",
+      modelId: "openai-codex/gpt-5.6-sol",
+      thinking: "xhigh",
+    });
+  });
+
+  it("keeps the requested level when the session reports no level of its own", async () => {
+    // An older pi or a stubbed session degrades to "nothing to say about the
+    // level", which must not read as "no level" on every surface.
+    const record = await spawnWithSession(
+      { thinking: "max" },
+      { model: { provider: "anthropic", id: "claude-haiku-4-5" } },
+    );
+
+    expect(record.invocation!.thinking).toBe("max");
+    expect(record.invocation!.requestedThinking).toBeUndefined();
+    expect(record.invocation!.modelName).toBe("claude-haiku-4-5");
+  });
+
+  it("leaves the invocation alone when the session reports no model", async () => {
+    const record = await spawnWithSession({ thinking: "max" }, {});
+
+    expect(record.invocation).toEqual({ thinking: "max" });
+  });
+});
