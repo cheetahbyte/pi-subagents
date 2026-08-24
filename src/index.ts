@@ -1100,10 +1100,11 @@ export default function (pi: ExtensionAPI) {
   }
 
   // ---- Agent tool description mode ----
-  // "full" (default) keeps the rich Claude Code-style description; "compact"
-  // swaps in a ~75% smaller one for small/local models (#91). Read once at
-  // tool registration — flipping it applies on the next pi session.
-  let toolDescriptionMode: ToolDescriptionMode = "full";
+  // "compact" (default) is a ~75% smaller description for small/local models
+  // (#91); "full" is the rich Claude Code-style description; "custom" reads a
+  // user-authored template. Read once at tool registration — flipping it
+  // applies on the next pi session.
+  let toolDescriptionMode: ToolDescriptionMode = "compact";
   function getToolDescriptionMode(): ToolDescriptionMode { return toolDescriptionMode; }
   function setToolDescriptionMode(mode: ToolDescriptionMode): void { toolDescriptionMode = mode; }
 
@@ -1467,10 +1468,8 @@ Terse command-style prompts produce shallow, generic work.
     description: agentToolDescription,
     promptSnippet: "Launch autonomous sub-agents for complex multi-step tasks",
     promptGuidelines: [
-      "Use Agent with specialized agents when the task matches an agent type's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing — if you delegate research to a subagent, do not also perform the same searches yourself.",
-      "For broad codebase exploration or research, spawn Agent with an appropriate subagent_type (e.g. Explore). Otherwise use direct tools (read, grep, find) when the target is already known.",
-      "When an agent runs in the background, you will be notified on completion — do not poll or sleep waiting for it. Continue with other work instead.",
-      "Trust but verify: an agent's summary describes intent, not outcome. When an agent writes or edits code, check the actual changes before reporting work as done.",
+      "Use Agent when the task matches an agent type's description or when independent work can run in parallel; otherwise use direct tools (read, grep, find) for known targets. Don't duplicate work you've delegated to an agent.",
+      "Background agents notify you on completion — don't poll or sleep waiting for one; continue other useful work. Never fabricate or predict a pending agent's results; if asked, say it's still running.",
     ],
     parameters: Type.Object({
       prompt: Type.String({
@@ -1482,11 +1481,11 @@ Terse command-style prompts produce shallow, generic work.
       name: Type.Optional(
         Type.String({
           description:
-            'Optional memorable name for this agent, e.g. "auth-audit", so it can be addressed as `@name` at the prompt and by steer_subagent / get_subagent_result. Letters, digits, `_` and `-`. Worth setting when several agents of the same type run at once; omit for one-off work. The agent stays reachable by its type either way.',
+            'Optional memorable name (letters, digits, `_`, `-`), e.g. "auth-audit", so the agent can be addressed as `@name` and by steer_subagent / get_subagent_result. Omit for one-off work.',
         }),
       ),
       subagent_type: Type.String({
-        description: `The type of specialized agent to use. Available types: ${getAvailableTypes().join(", ")}. Custom agents from .pi/agents/*.md (project) or ${getAgentDir()}/agents/*.md (global) are also available.`,
+        description: "The type of specialized agent to use. See the tool description for the available types.",
       }),
       model: Type.Optional(
         Type.String({
@@ -1507,12 +1506,12 @@ Terse command-style prompts produce shallow, generic work.
       ),
       run_in_background: Type.Optional(
         Type.Boolean({
-          description: "Defaults to true — the agent runs detached, returning its ID immediately, and you are notified on completion. Set false only when your very next action depends on the result; the call then blocks and returns the agent's full output inline.",
+          description: "Defaults to true — runs detached and returns the agent ID immediately; you are notified on completion. Set false only when your very next action depends on the result — the call then blocks and returns the full output inline.",
         }),
       ),
       resume: Type.Optional(
         Type.String({
-          description: "Optional agent ID to resume from. Continues from previous context. Resumes detached like any other spawn; pass run_in_background: false to block and get the result inline. An agent can only be resumed once its current run has finished — use steer_subagent to reach one mid-run.",
+          description: "Optional agent ID to resume from — continues from previous context. Resumes detached like any other spawn; pass run_in_background: false for the result inline. Only resume a finished run; use steer_subagent mid-run.",
         }),
       ),
       isolated: Type.Optional(
@@ -3002,7 +3001,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
         {
           id: "toolDescriptionMode",
           label: "Tool description",
-          description: "Agent tool description sent to the LLM: full (rich, default), compact (~75% fewer tokens, for small/local models), or custom (.pi/agent-tool-description.md with {{placeholders}})",
+          description: "Agent tool description sent to the LLM: compact (default, ~75% fewer tokens, for small/local models), full (rich), or custom (.pi/agent-tool-description.md with {{placeholders}})",
           currentValue: getToolDescriptionMode(),
           values: ["full", "compact", "custom"],
         },

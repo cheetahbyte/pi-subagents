@@ -89,15 +89,39 @@ describe("toolDescriptionMode", () => {
     rmSync(hermeticAgentDir, { recursive: true, force: true });
   });
 
-  it("defaults to the full description", () => {
+  it("defaults to the compact description", () => {
     const tools = setup();
     const desc: string = tools.get("Agent").description;
-    expect(desc).toContain("## Usage notes");
-    expect(desc).toContain("## Writing the prompt");
-    // Full agent descriptions are embedded (a late Explore sentence survives).
-    expect(desc).toContain("very thorough");
+    expect(desc).toContain("Launch an autonomous agent");
+    expect(desc).not.toContain("## Usage notes");
+    expect(desc).not.toContain("## Writing the prompt");
   });
 
+  it("background-agent guideline forbids polling and keeps the honest-status contract", () => {
+    const joined = (setup().get("Agent").promptGuidelines as string[]).join("\n");
+    expect(joined).toContain("don't poll or sleep");
+    expect(joined).toContain("continue other useful work");
+    expect(joined).toContain("fabricate or predict");
+    expect(joined).toContain("still running");
+  });
+
+  it("subagent_type defers type discovery to the tool description", () => {
+    // The schema no longer embeds the (registration-time) type list — the
+    // description is the single discovery point, so a custom agent added later
+    // can't be missed by a stale schema list. Discovery moves to the tool
+    // description, which is built from the live registry at registration.
+    const props = setup().get("Agent").parameters?.properties ?? {};
+    const subagentDesc: string = props.subagent_type?.description ?? "";
+    expect(subagentDesc).toContain("See the tool description");
+    expect(subagentDesc).not.toContain("Available types: general-purpose");
+  });
+
+  it("invalid mode in the settings file is dropped — compact default", () => {
+    const tools = setup({ toolDescriptionMode: "tiny" });
+    const desc: string = tools.get("Agent").description;
+    expect(desc).toContain("Launch an autonomous agent");
+    expect(desc).not.toContain("## Usage notes");
+  });
   it("compact mode swaps in the short description with one-line type list", () => {
     const tools = setup({ toolDescriptionMode: "compact" });
     const desc: string = tools.get("Agent").description;
@@ -112,10 +136,13 @@ describe("toolDescriptionMode", () => {
     expect(desc.length).toBeLessThan(1600);
   });
 
-  it("invalid mode in the settings file is dropped — full description", () => {
-    const tools = setup({ toolDescriptionMode: "tiny" });
+  it("full mode is still reachable explicitly", () => {
+    const tools = setup({ toolDescriptionMode: "full" });
     const desc: string = tools.get("Agent").description;
     expect(desc).toContain("## Usage notes");
+    expect(desc).toContain("## Writing the prompt");
+    // Full agent descriptions are embedded (a late Explore sentence survives).
+    expect(desc).toContain("very thorough");
   });
 
   it("compact keeps every load-bearing contract — fails when a behavior change forgets compact", () => {
@@ -144,7 +171,7 @@ describe("toolDescriptionMode", () => {
   // survives either choice. The second test then keeps the schema half honest,
   // so "it's also in the schema" can never degrade to an empty stub.
   it("full states every load-bearing contract in the description or the schema", () => {
-    const tool = setup().get("Agent");
+    const tool = setup({ toolDescriptionMode: "full" }).get("Agent");
     const visible = `${tool.description}\n${JSON.stringify(tool.parameters)}`;
     for (const contract of [
       "run_in_background",
@@ -307,7 +334,7 @@ describe("toolDescriptionMode", () => {
       Object.keys(tools.get("Agent").parameters?.properties ?? {});
 
     it("advertises `isolation` in schema and prose by default", () => {
-      const tools = setup();
+      const tools = setup({ toolDescriptionMode: "full" });
       expect(props(tools)).toContain("isolation");
       expect(tools.get("Agent").description).toContain('Use isolation: "worktree"');
     });

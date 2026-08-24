@@ -170,7 +170,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       max_turns: Type.Optional(Type.Number({ minimum: 1 })),
       run_in_background: Type.Optional(
         Type.Boolean({
-          description: "Defaults to false for nested spawns — the call blocks and returns the child's result inline. Set true only for work you will collect later with get_subagent_result; a detached child is stopped when you finish.",
+          description: "Defaults to false — the call blocks and returns the child's result inline. Set true only for work you'll collect later with get_subagent_result; a detached child is stopped when you finish.",
         }),
       ),
       resume: Type.Optional(Type.String({ description: "Resume a nested agent owned by this parent." })),
