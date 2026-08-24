@@ -269,6 +269,7 @@ export class AgentWidget {
      * supplies the user's `showCost` setting.
      */
     private showCost: () => boolean = () => false,
+    private publishStatus: (value: string | null) => void = () => {},
   ) {}
 
   /**
@@ -566,6 +567,7 @@ export class AgentWidget {
       }
       if (this.lastStatusText !== undefined) {
         this.uiCtx.setStatus("subagents", undefined);
+        this.publishStatus(null);
         this.lastStatusText = undefined;
       }
       if (this.widgetInterval) { clearInterval(this.widgetInterval); this.widgetInterval = undefined; }
@@ -587,6 +589,7 @@ export class AgentWidget {
     }
     if (newStatusText !== this.lastStatusText) {
       this.uiCtx.setStatus("subagents", newStatusText);
+      this.publishStatus(newStatusText ?? null);
       this.lastStatusText = newStatusText;
     }
 
@@ -622,6 +625,7 @@ export class AgentWidget {
       this.uiCtx.setWidget("agents", undefined);
       this.uiCtx.setStatus("subagents", undefined);
     }
+    this.publishStatus(null);
     this.widgetRegistered = false;
     this.tui = undefined;
     this.lastStatusText = undefined;

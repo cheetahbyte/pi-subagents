@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`pi-footer` event-widget integration.** Add a **Pi Event Value** widget with ID `subagents` to place the live running/queued agent count in a configurable `pi-footer` line; the existing Pi extension status remains available as a fallback.
 - **`subagents:rpc:consume` — a cross-extension caller can say it has already shown an agent's result** ([tintinweb/pi-tasks#62](https://github.com/tintinweb/pi-tasks/issues/62) — thanks [@felipe3dfx](https://github.com/felipe3dfx)). `get_subagent_result` suppresses the completion notification for a result it hands back, but it is a tool the parent model calls; an extension that joins an agent on `subagents:completed` and reports the result itself had no way to do the same, so the notification still arrived — after the parent had answered — and cost a turn to dismiss. The new RPC marks a settled agent's result consumed, exactly as the tool does. Running and unknown agents are refused, so a caller cannot silence an agent whose result nobody has read yet. Deliberately outside the `subagents:rpc:ping` version handshake: it is additive and best-effort, and an extension built against protocol v2 simply never calls it.
 
 ### Fixed

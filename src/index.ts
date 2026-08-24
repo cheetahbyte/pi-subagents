@@ -1039,7 +1039,13 @@ export default function (pi: ExtensionAPI) {
   // everything else; "off" = hide the widget entirely. Read live at render time.
   let widgetMode: WidgetMode = "background";
   function getWidgetMode(): WidgetMode { return widgetMode; }
-  const widget = new AgentWidget(manager, agentActivity, getWidgetMode, isShowCostEnabled);
+  const widget = new AgentWidget(
+    manager,
+    agentActivity,
+    getWidgetMode,
+    isShowCostEnabled,
+    (value) => pi.events.emit("pi-footer:update-widget", { widgetId: "subagents", value }),
+  );
   function setWidgetMode(m: WidgetMode): void { widgetMode = m; widget.update(); }
 
   // Claude Code-style FleetView: navigable list of main + subagents below the editor.

@@ -100,6 +100,25 @@ describe("AgentWidget", () => {
       .join("\n");
   }
 
+  it("publishes status updates for pi-footer event widgets", () => {
+    const agent = makeRecord("background", { isBackground: true });
+    const published: Array<string | null> = [];
+    const widget = new AgentWidget(
+      { listAgents: () => [agent] } as any,
+      new Map([[agent.id, makeActivity()]]),
+      () => "background",
+      () => false,
+      (value) => published.push(value),
+    );
+    widget.setUICtx({ setStatus: () => {}, setWidget: () => {} });
+
+    widget.update();
+    agent.status = "completed";
+    widget.update();
+
+    expect(published).toEqual(["1 running agent", null]);
+  });
+
   // "all" (and the no-policy constructor default) shows every agent.
   it("shows foreground agents in 'all' mode (and by default)", () => {
     const manager = { listAgents: () => [makeRecord("foreground", { isBackground: false })] };
