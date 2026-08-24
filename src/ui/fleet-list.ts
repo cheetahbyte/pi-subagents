@@ -1,14 +1,18 @@
 /**
- * fleet-list.ts — Claude Code-style "FleetView" list rendered below the editor.
+ * fleet-list.ts — Claude Code-style "FleetView" full-screen agent picker.
  *
- * Shows `main` + each running/queued subagent as a navigable list. Pressing ↓ (or
- * ←) at an empty prompt activates the list; ↑/↓ move the selection (filled ● marker),
- * Enter opens the selected agent's live conversation overlay, Esc returns to the prompt.
- * A viewer stays open when its agent finishes; finished agents linger briefly in the list.
+ * ← at an empty prompt opens a full-screen overlay listing `main` plus every
+ * retained top-level subagent that has a session (newest first, capped at 30).
+ * ↑/↓ move the selection (filled ● marker), Enter opens the selected agent's
+ * live conversation overlay, Esc (or Enter on `main`) returns to the native
+ * main transcript. A viewer stays open when its agent finishes; Esc from the
+ * viewer returns to the picker with the selection preserved.
  *
- * Mechanics (see plan): the list is a `belowEditor` widget (render-only), and ALL key
- * handling goes through `onTerminalInput` — which fires before the focused editor and
- * can `consume` keys — gated on `getEditorText() === ""` so normal typing is untouched.
+ * Mechanics: all key handling goes through `onTerminalInput` — which fires
+ * before the focused editor and can `consume` keys — gated on the editor
+ * owning focus and `getEditorText() === ""` so normal typing is untouched.
+ * The picker itself is a minimal `ctx.ui.custom` overlay component; pi routes
+ * its keys straight to the component's `handleInput`.
  */
 
 import { Editor, isKeyRelease, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -19,22 +23,11 @@ import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
 import { type AgentActivity, formatCost, type Theme } from "./agent-widget.js";
 import { ConversationViewer, VIEWPORT_HEIGHT_PCT } from "./conversation-viewer.js";
 
-/** Widget key for the below-editor fleet list. */
-const FLEET_KEY = "fleet";
-/** Max agent rows shown at once; extras collapse into a "↓ N more" indicator. */
-const MAX_AGENT_ROWS = 5;
-/** Re-render cadence so elapsed/token stats tick while agents run. */
-const TICK_MS = 200;
-/** How long a finished agent lingers in the list before it drops out. */
-const FINISHED_LINGER_MS = 4000;
+/** Max agent rows in the picker roster; older agents beyond this are dropped. */
+const MAX_AGENTS = 30;
 
-/** Minimal UI surface the FleetView needs from `ctx.ui` (structural subset). */
+/** Minimal UI surface the picker needs from `ctx.ui` (structural subset). */
 export type FleetUICtx = {
-  setWidget(
-    key: string,
-    content: undefined | ((tui: any, theme: Theme) => { render(width: number): string[]; invalidate(): void; dispose?(): void }),
-    options?: { placement?: "aboveEditor" | "belowEditor" },
-  ): void;
   onTerminalInput(handler: (data: string) => { consume?: boolean; data?: string } | undefined): () => void;
   getEditorText(): string;
   notify(message: string, type?: "info" | "warning" | "error"): void;
@@ -47,6 +40,11 @@ export type FleetUICtx = {
 type MainEntry = { kind: "main" };
 type AgentEntry = { kind: "agent"; record: AgentRecord };
 type FleetEntry = MainEntry | AgentEntry;
+
+/** What the picker overlay reports when it closes. */
+type PickerOutcome =
+  | { kind: "main" }                       // Esc, or Enter on `main` → native main transcript
+  | { kind: "open"; record: AgentRecord }; // Enter on an agent → conversation viewer
 
 /** `11s` — integer seconds, no decimal/suffix (matches Claude Code, unlike formatMs). */
 export function formatFleetElapsed(ms: number): string {
@@ -77,17 +75,19 @@ function rightAlign(left: string, right: string, width: number): string {
 
 export class FleetList {
   private ui: FleetUICtx | undefined;
+  /** Last tui seen (captured from an overlay factory) — used for the focus check. */
   private tui: any | undefined;
   private inputUnsub: (() => void) | undefined;
-  private widgetRegistered = false;
-  private timer: ReturnType<typeof setInterval> | undefined;
 
   private enabled = true;
-  /** Whether arrow keys currently navigate the list (vs. flow to the editor). */
-  private active = false;
-  /** 0 = `main`, 1..N = subagents. */
+  /** True while the picker or a conversation viewer overlay is on screen. */
+  private overlayOpen = false;
+  /** 0 = `main`, 1..N = subagents. Seeds each picker; preserved across viewer round-trips. */
   private selectedIndex = 0;
-  /** Set while a conversation overlay is open; calling it closes the overlay. */
+  /** Set while a force-closed overlay's promise is pending — that close must not reopen anything. */
+  private suppressReopen = false;
+  /** Force-close handles for whichever overlay is currently open. */
+  private pickerClose: (() => void) | undefined;
   private viewerClose: (() => void) | undefined;
   private viewingAgentId: string | undefined;
 
@@ -95,7 +95,7 @@ export class FleetList {
     private manager: AgentManager,
     private agentActivity: Map<string, AgentActivity>,
     /**
-     * Read live at render time. Whether each row shows an estimated cost after
+     * Read when the picker opens. Whether each row shows an estimated cost after
      * its token count. Defaults to off — the extension supplies the user's
      * `showCost` setting.
      */
@@ -107,8 +107,7 @@ export class FleetList {
   setEnabled(enabled: boolean): void {
     if (enabled === this.enabled) return;
     this.enabled = enabled;
-    if (!enabled) this.active = false;
-    this.update();
+    if (!enabled) this.closeOverlay();
   }
 
   /** Capture the UI context and (re)register the global input handler. */
@@ -116,91 +115,53 @@ export class FleetList {
     if (ui === this.ui) return;
     this.inputUnsub?.();
     this.ui = ui;
-    this.widgetRegistered = false;
     this.tui = undefined;
     this.inputUnsub = ui.onTerminalInput(data => this.handleKey(data));
   }
 
-  /** Ensure the re-render timer is running (called when an agent spawns). */
-  ensureTimer(): void {
-    if (!this.timer) this.timer = setInterval(() => this.update(), TICK_MS);
-  }
-
-  /**
-   * Called when an agent finishes. The viewer (if open on it) stays open so the
-   * final output remains readable, and the row lingers in the list — just refresh.
-   */
-  onAgentFinished(_id: string): void {
-    this.update();
-  }
+  /** Kept for the extension's spawn hooks — the picker re-renders on input, no timer. */
+  ensureTimer(): void {}
+  /** Kept for the extension's refresh hooks — the roster is read live at render time. */
+  update(): void {}
+  /** Kept for the extension's completion hook — the viewer stays open on its own. */
+  onAgentFinished(_id: string): void {}
 
   dispose(): void {
-    if (this.timer) { clearInterval(this.timer); this.timer = undefined; }
     this.inputUnsub?.();
     this.inputUnsub = undefined;
-    if (this.viewerClose) { this.viewerClose(); this.viewerClose = undefined; }
+    this.closeOverlay();
     this.viewingAgentId = undefined;
-    if (this.ui && this.widgetRegistered) this.ui.setWidget(FLEET_KEY, undefined);
-    this.widgetRegistered = false;
     this.tui = undefined;
-    this.active = false;
-    // Null last so a `viewerClose()` microtask above can't re-register the widget.
+    this.selectedIndex = 0;
+    // Null last so the overlay-close microtask can't reach a live ui.
     this.ui = undefined;
   }
 
-  /** Re-register/refresh the below-editor widget; clears it when no agents remain. */
-  update(): void {
-    if (!this.ui) return;
-    const hasAgents = this.enabled && this.agentRecords().length > 0;
-
-    if (!hasAgents) {
-      if (this.widgetRegistered) {
-        this.ui.setWidget(FLEET_KEY, undefined);
-        this.widgetRegistered = false;
-        this.tui = undefined;
-      }
-      if (this.timer) { clearInterval(this.timer); this.timer = undefined; }
-      this.active = false;
-      this.selectedIndex = 0;
-      return;
-    }
-
-    this.clampSelection();
-    this.ensureTimer(); // keep stats ticking whenever the list is shown (e.g. after a re-enable)
-
-    if (!this.widgetRegistered) {
-      this.ui.setWidget(FLEET_KEY, (tui, theme) => {
-        this.tui = tui;
-        return {
-          render: (w: number) => this.renderBar(w, theme),
-          invalidate: () => { this.widgetRegistered = false; this.tui = undefined; },
-        };
-      }, { placement: "belowEditor" });
-      this.widgetRegistered = true;
-    } else {
-      this.tui?.requestRender();
-    }
+  /** Close whichever overlay is up (disable/dispose) without reopening anything. */
+  private closeOverlay(): void {
+    const close = this.viewerClose ?? this.pickerClose;
+    this.suppressReopen = close !== undefined;
+    this.overlayOpen = false;
+    this.viewerClose = undefined;
+    this.pickerClose = undefined;
+    close?.();
   }
 
   // ---- Roster ----
 
   /**
-   * Agents shown in the list, ordered earliest-launched first so the ones you
-   * started sooner sit at the top. Every row is openable (has a session), so Enter
-   * never dead-ends. Included: running/queued, plus the agent currently being
-   * viewed, plus recently-finished ones (they linger briefly before dropping out).
-   * Pending agents with no session yet are hidden until they start.
-   * (`listAgents()` is newest-first, so we re-sort.)
+   * Agents offered by the picker: every retained top-level record that still
+   * has a session, newest first (the manager already sorts `listAgents()` that
+   * way). Retained covers all statuses — running, queued, finished, stopped —
+   * so a completed agent stays openable. Tombstones (evicted records) are only
+   * reachable via `listTombstones()` and never appear here; nested children are
+   * owned by their parent's thread and hidden. Capped so the picker stays
+   * responsive on long sessions.
    */
   private agentRecords(): AgentRecord[] {
-    const now = Date.now();
     return this.manager.listAgents()
-      .filter(a => !a.parentAgentId && a.session && (
-        a.status === "running" || a.status === "queued"
-        || a.id === this.viewingAgentId
-        || (a.completedAt != null && now - a.completedAt < FINISHED_LINGER_MS)
-      ))
-      .sort((a, b) => a.startedAt - b.startedAt);
+      .filter(a => !a.parentAgentId && a.session)
+      .slice(0, MAX_AGENTS);
   }
 
   private roster(): FleetEntry[] {
@@ -219,50 +180,21 @@ export class FleetList {
   handleKey(data: string): { consume?: boolean; data?: string } | undefined {
     if (!this.enabled || !this.ui) return undefined;
     // Input listeners receive BOTH key-press and key-release (the kitty protocol
-    // emits both, and matchesKey matches either) — act on press only, or every
-    // tap would move/fire twice. Repeats still pass through for held-key nav.
+    // emits both, and matchesKey matches either) — act on press only.
     if (isKeyRelease(data)) return undefined;
-    // While an overlay is open, let it own all input.
-    if (this.viewerClose) return undefined;
+    // While an overlay is open, it owns all input.
+    if (this.overlayOpen) return undefined;
     // Input listeners fire BEFORE the focused component, and dialogs
     // (ctx.ui.select/confirm/input, pi's own menus) swap the prompt editor out
     // while getEditorText() still reads the detached — empty — editor. So when
     // anything but the editor owns the keyboard, stay out of its keys (#123).
-    if (!this.editorHasFocus()) {
-      if (this.active) this.deactivate();
-      return undefined;
-    }
+    if (!this.editorHasFocus()) return undefined;
 
-    if (!this.active) {
-      // Activate: ↓ or ← at an empty prompt moves focus into the list.
-      const isActivator = matchesKey(data, "down") || matchesKey(data, "left");
-      if (isActivator && this.agentRecords().length > 0 && this.ui.getEditorText() === "") {
-        this.active = true;
-        this.selectedIndex = 0;
-        this.update();
-        return { consume: true };
-      }
-      return undefined;
-    }
-
-    // Active — arrows navigate, Enter opens, Esc / Up-past-top exits.
-    if (matchesKey(data, "down")) {
-      const max = this.roster().length - 1;
-      this.selectedIndex = Math.min(max, this.selectedIndex + 1);
-      this.update();
+    // ← at an empty prompt opens the picker; every other key flows to the editor.
+    if (matchesKey(data, "left") && this.ui.getEditorText() === "") {
+      this.openPicker();
       return { consume: true };
     }
-    if (matchesKey(data, "up")) {
-      if (this.selectedIndex === 0) { this.deactivate(); return { consume: true }; }
-      this.selectedIndex -= 1;
-      this.update();
-      return { consume: true };
-    }
-    if (matchesKey(data, "escape")) { this.deactivate(); return { consume: true }; }
-    if (matchesKey(data, Key.enter)) { this.openSelected(); return { consume: true }; }
-
-    // Any other key cancels navigation and flows to the editor.
-    this.deactivate();
     return undefined;
   }
 
@@ -279,29 +211,60 @@ export class FleetList {
     return focused == null || focused instanceof Editor;
   }
 
-  private deactivate(): void {
-    this.active = false;
-    this.selectedIndex = 0;
-    this.update();
+  // ---- Overlay flow ----
+
+  /** Open the full-screen picker overlay (from ← at an empty prompt). */
+  private openPicker(): void {
+    if (!this.ui || this.overlayOpen) return;
+    this.clampSelection();
+    this.overlayOpen = true;
+    // The roster is read live at render time so a finishing agent's row drops
+    // out without a timer. `showCost` is read once, like the viewer's.
+    const initialIndex = this.selectedIndex;
+    const showCost = this.showCost();
+    void this.ui.custom<PickerOutcome>(
+      (tui, theme, _keybindings, done) => {
+        this.tui = tui;
+        this.pickerClose = () => done({ kind: "main" });
+        return new FleetPicker(tui, theme, {
+          getRoster: () => this.roster(),
+          initialIndex,
+          showCost,
+          done,
+        });
+      },
+      {
+        overlay: true,
+        overlayOptions: { anchor: "top-center", width: "100%", maxHeight: "100%", margin: 0 },
+      },
+    ).then(
+      outcome => this.pickerClosed(outcome),
+      () => this.pickerClosed({ kind: "main" }), // error → just land on main, nothing to reopen
+    );
   }
 
-  private openSelected(): void {
-    const entry = this.roster()[this.selectedIndex];
-    if (!entry || entry.kind === "main") {
-      // `main` = return to the prompt; the native transcript is already shown.
-      this.deactivate();
+  /** Picker closed: `main` ends the flow; an agent hands off to its viewer. */
+  private pickerClosed(outcome: PickerOutcome): void {
+    this.pickerClose = undefined;
+    this.overlayOpen = false;
+    if (this.suppressReopen) { this.suppressReopen = false; return; }
+    if (outcome.kind === "main") {
+      this.selectedIndex = 0; // fresh start next time
       return;
     }
-    const record = entry.record;
-    if (!this.ui) return;
-    if (!record.session) {
-      this.ui.notify(`Agent is ${record.status} — no session available.`, "info");
-      return;
-    }
+    this.openViewer(outcome.record);
+  }
+
+  /**
+   * Open the agent's conversation viewer. The picker is already closed — its
+   * `done` ran before this promise callback — so the overlays never stack.
+   */
+  private openViewer(record: AgentRecord): void {
+    if (!this.ui || !record.session) return;
+    this.overlayOpen = true;
+    this.viewingAgentId = record.id;
     const session = record.session;
     const activity = this.agentActivity.get(record.id);
-    this.viewingAgentId = record.id;
-
     void this.ui.custom<undefined>(
       (tui, theme, keybindings, done) => {
         this.viewerClose = () => done(undefined);
@@ -324,79 +287,140 @@ export class FleetList {
         overlay: true,
         overlayOptions: { anchor: "center", width: "90%", maxHeight: `${VIEWPORT_HEIGHT_PCT}%` },
       },
-    ).then(() => this.clearViewer(), () => this.clearViewer());
+    ).then(() => this.viewerClosed(), () => this.viewerClosed());
   }
 
-  /** Reset overlay state and return to the list (on close, auto-close, or error). */
-  private clearViewer(): void {
-    // Keep the cursor on the agent we were viewing — re-resolve by id so it
-    // still feels natural if the list reordered (an earlier agent finished)
-    // while the overlay was open. If that agent is gone, leave the index for
-    // update()'s clamp to settle.
+  /**
+   * Viewer closed (Esc) — reopen the picker with the selection on the agent we
+   * were viewing. Re-resolve by id so it still lands right if the roster
+   * reordered while the overlay was up; if the agent is gone, keep the index
+   * and let the picker's clamp settle it.
+   */
+  private viewerClosed(): void {
+    this.viewerClose = undefined;
+    this.overlayOpen = false;
+    if (this.suppressReopen) { this.suppressReopen = false; return; }
     if (this.viewingAgentId) {
       const idx = this.roster().findIndex(e => e.kind === "agent" && e.record.id === this.viewingAgentId);
       if (idx >= 0) this.selectedIndex = idx;
     }
-    this.viewerClose = undefined;
     this.viewingAgentId = undefined;
-    this.update();
+    this.openPicker();
   }
+}
+
+/**
+ * Full-screen picker overlay. Minimal by design: navigation state lives here,
+ * and FleetList re-seeds it after a viewer round-trip. pi routes keys to the
+ * focused overlay component (key releases are filtered unless the component
+ * opts in via `wantsKeyRelease`) and calls `render()` with the overlay width.
+ */
+class FleetPicker {
+  private index: number;
+
+  constructor(
+    private tui: any,
+    private theme: Theme,
+    private deps: {
+      getRoster: () => FleetEntry[];
+      initialIndex: number;
+      showCost: boolean;
+      done: (outcome: PickerOutcome) => void;
+    },
+  ) {
+    this.index = deps.initialIndex;
+  }
+
+  handleInput(data: string): void {
+    // Defensive: pi already filters releases for components, but a release must
+    // never be treated as a press here either.
+    if (isKeyRelease(data)) return;
+    const roster = this.deps.getRoster();
+    if (matchesKey(data, "down")) {
+      this.index = Math.min(roster.length - 1, this.index + 1);
+      this.tui.requestRender();
+    } else if (matchesKey(data, "up")) {
+      this.index = Math.max(0, this.index - 1);
+      this.tui.requestRender();
+    } else if (matchesKey(data, "escape")) {
+      this.deps.done({ kind: "main" });
+    } else if (matchesKey(data, Key.enter)) {
+      const entry = roster[this.index];
+      if (entry?.kind === "main") this.deps.done({ kind: "main" });
+      else if (entry?.kind === "agent") this.deps.done({ kind: "open", record: entry.record });
+    }
+  }
+
+  render(width: number): string[] {
+    const rows = Math.max(1, this.tui.terminal.rows ?? 1);
+    const roster = this.deps.getRoster();
+    const sel = Math.min(this.index, roster.length - 1);
+    const th = this.theme;
+    // Hint + blank separator top the list; the terminal height bounds the rest.
+    const header = rows >= 3 ? 2 : 1;
+    const budget = Math.max(0, rows - header);
+    let visible = Math.min(roster.length, budget);
+    let start = sel < visible ? 0 : sel - visible + 1;
+    let below = roster.length - (start + visible);
+    // The window plus its "↑ N more"/"↓ N more" indicators must fit the budget —
+    // shrink (and re-center) until they do.
+    while (visible > 0 && visible + (start > 0 ? 1 : 0) + (below > 0 ? 1 : 0) > budget) {
+      visible -= 1;
+      start = sel < visible ? 0 : sel - visible + 1;
+      below = roster.length - (start + visible);
+    }
+
+    const lines: string[] = [
+      truncateToWidth(`  ${th.fg("dim", "↑↓ select · enter view · esc close")}`, width),
+    ];
+    if (header === 2) lines.push("");
+    if (start > 0) lines.push(rightAlign("", th.fg("dim", `↑ ${start} more`), width));
+    for (let r = start; r < start + visible; r++) {
+      lines.push(this.row(r, sel, roster[r], width));
+    }
+    if (below > 0) lines.push(rightAlign("", th.fg("dim", `↓ ${below} more`), width));
+    // Fill the rest of the screen so the overlay covers the terminal.
+    while (lines.length < rows) lines.push("");
+    return lines.slice(0, rows);
+  }
+
+  invalidate(): void { /* no cached state to clear */ }
+  dispose(): void { /* no subscriptions */ }
 
   // ---- Rendering ----
 
-  private renderBar(width: number, theme: Theme): string[] {
-    const agents = this.roster().slice(1) as AgentEntry[];
-    if (agents.length === 0) return [];
-    // Clamp locally so a render between a roster shrink and the next update()
-    // (e.g. on terminal resize) never loses the selection marker.
-    const sel = Math.min(this.selectedIndex, agents.length);
-
-    const hint = this.active
-      ? "↑↓ select · enter view · esc back"
-      : "esc to interrupt · ← for agents · ↓ to manage";
-    const lines: string[] = [];
-    lines.push(truncateToWidth("  " + theme.fg("dim", hint), width));
-    lines.push("");
-    lines.push(truncateToWidth(`  ${this.bullet(0, sel, theme)} main`, width));
-
-    // Window the agent rows so the selected one stays visible.
-    const visible = Math.min(MAX_AGENT_ROWS, agents.length);
-    const selAgent = Math.max(0, sel - 1);
-    const start = selAgent < visible ? 0 : selAgent - visible + 1;
-    const hiddenBelow = agents.length - (start + visible);
-
-    if (start > 0) lines.push(rightAlign("", theme.fg("dim", `↑ ${start} more`), width));
-    for (let a = start; a < start + visible; a++) {
-      lines.push(this.renderAgentRow(a + 1, sel, agents[a].record, width, theme));
+  private row(rosterIndex: number, sel: number, entry: FleetEntry, width: number): string {
+    if (entry.kind === "main") {
+      return truncateToWidth(`  ${this.bullet(rosterIndex, sel)} main`, width);
     }
-    if (hiddenBelow > 0) lines.push(rightAlign("", theme.fg("dim", `↓ ${hiddenBelow} more`), width));
-
-    return lines;
+    return this.agentRow(rosterIndex, sel, entry.record, width);
   }
 
-  private bullet(rosterIndex: number, sel: number, theme: Theme): string {
-    return rosterIndex === sel ? theme.fg("accent", "●") : theme.fg("dim", "○");
+  private bullet(rosterIndex: number, sel: number): string {
+    const th = this.theme;
+    return rosterIndex === sel ? th.fg("accent", "●") : th.fg("dim", "○");
   }
 
-  private renderAgentRow(rosterIndex: number, sel: number, record: AgentRecord, width: number, theme: Theme): string {
+  private agentRow(rosterIndex: number, sel: number, record: AgentRecord, width: number): string {
+    const th = this.theme;
     // The selected row renders in the theme's primary text color so it reads as
     // one selection (#230). A configured badge survives — Claude Code's FleetView
     // keeps the agent color on the selected row too and only bolds it — which also
     // keeps the row's width fixed as the selection moves.
     const selected = rosterIndex === sel;
-    const name = renderAgentName(record.type, theme, selected
+    const name = renderAgentName(record.type, th, selected
       ? { fallbackColor: "text", bold: hasAgentBadge(record.type) }
       : { fallbackColor: "muted" });
-    const description = selected ? theme.fg("text", record.description) : record.description;
-    const left = `  ${this.bullet(rosterIndex, sel, theme)} ${name}  ${description}`;
+    const description = selected ? th.fg("text", record.description) : record.description;
+    const left = `  ${this.bullet(rosterIndex, sel)} ${name}  ${description}`;
     // The record, not the activity tracker — see the note in AgentWidget's
     // running line: only the record carries a nested child's spend, and only it
     // outlives the agent.
     const tokens = getLifetimeTotal(record.lifetimeUsage);
     const elapsedMs = (record.completedAt ?? Date.now()) - record.startedAt; // freezes once finished
-    const cost = this.showCost() ? formatCost(getLifetimeCost(record.lifetimeUsage)) : "";
+    const cost = this.deps.showCost ? formatCost(getLifetimeCost(record.lifetimeUsage)) : "";
     const stats = `${formatFleetElapsed(elapsedMs)} · ${formatFleetTokens(tokens)}${cost ? ` · ${cost}` : ""}`;
-    const right = selected ? theme.fg("text", stats) : theme.fg("dim", stats);
+    const right = selected ? th.fg("text", stats) : th.fg("dim", stats);
     return rightAlign(left, right, width);
   }
 }

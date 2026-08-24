@@ -37,13 +37,15 @@ function makePi() {
   return { pi, tools, lifecycle };
 }
 
-/** A UI context with the surfaces the widget + fleet touch; setWidget is spied. */
+/** A UI context with the surfaces the fleet touches. */
 function uiCtx() {
+  const inputUnsub = vi.fn();
   return {
     setStatus: vi.fn(),
     setWidget: vi.fn(),
     notify: vi.fn(),
-    onTerminalInput: vi.fn(() => vi.fn()),
+    onTerminalInput: vi.fn(() => inputUnsub),
+    inputUnsub,
     getEditorText: vi.fn(() => ""),
     custom: vi.fn(),
   };
@@ -108,7 +110,7 @@ describe("FleetView wiring (real extension lifecycle)", () => {
     expect(ui.onTerminalInput).toHaveBeenCalled();
   });
 
-  it("registers the belowEditor widget once a spawned agent has a session, then clears it on shutdown", async () => {
+  it("does not register a belowEditor widget and removes its input listener on shutdown", async () => {
     vi.mocked(runAgent).mockResolvedValue({
       responseText: "done",
       session: { dispose: vi.fn() } as any,
@@ -130,12 +132,11 @@ describe("FleetView wiring (real extension lifecycle)", () => {
       ctxWith(uiCtx()),
     );
     expect(textOf(spawn)).toMatch(/Agent ID:/);
-    await flush(); // completion → fleet.onAgentFinished → update → widget registers
+    await flush();
 
-    const fleetRegs = ui.setWidget.mock.calls.filter(c => c[0] === "fleet" && typeof c[1] === "function");
-    expect(fleetRegs.length, "fleet widget should register with a render factory").toBeGreaterThan(0);
+    expect(ui.setWidget).not.toHaveBeenCalled();
 
     await lifecycle.get("session_shutdown")?.({}, ctxWith(uiCtx()));
-    expect(ui.setWidget).toHaveBeenCalledWith("fleet", undefined); // dispose cleared it
+    expect(ui.inputUnsub).toHaveBeenCalled();
   });
 });
