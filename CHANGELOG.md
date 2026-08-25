@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Background children can ask their parent a question** with `ask_parent({ question })`; the parent answers with `answer_subagent_question({ question_id, answer })`. A top-level child's question goes to the root agent, while a nested child's question routes only to its immediate parent. Foreground children are refused — their parent is blocked on the `Agent` call — and a child can hold at most one pending question at a time. Cancelling the child, its parent, the tool call, or the manager rejects or clears the pending question, and questions do not survive a restart.
+
 ### Changed
 - **FleetView displays a selected subagent in Pi's native transcript.** The extension uses a guarded private compatibility patch because Pi does not expose transcript replacement; unsupported Pi versions retain the existing conversation overlay. Selecting `main`, pressing Esc, disabling FleetView, or unloading the extension restores the parent transcript without mutating either session.
 

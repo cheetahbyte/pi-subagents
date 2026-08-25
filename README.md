@@ -340,6 +340,27 @@ Nested children occupy no concurrency slot, in either pool — their parent alre
 
 Because a subagent session never activates this extension (that is what keeps a child from building a second agent manager, and it is why nested tools are injected directly instead), a subagent also gets none of the extension's other surfaces: no `/agents` command, no cross-extension RPC handlers, no `subagents:ready` event.
 
+#### Asking the parent
+
+A background child can ask its parent a question:
+
+```
+ask_parent({ question: "Should I update the test fixtures too?" })
+```
+
+The parent receives the question and answers it:
+
+```
+answer_subagent_question({ question_id: "q_…", answer: "No, leave them as-is" })
+```
+
+Rules:
+
+- A top-level child's question goes to the root agent; a nested child's question goes only to its immediate parent.
+- Only background children can ask. A foreground child's parent is blocked on the `Agent` call, so its question is refused.
+- A child can have at most one pending question at a time; asking again while one is outstanding is refused.
+- Cancelling the child, its parent, the tool call, or the manager rejects or clears the pending question. Questions never persist across a restart.
+
 ### Tool & extension scoping
 
 `extensions:` decides **which extensions load**, `tools:` decides **which tools surface to the LLM**. They compose:

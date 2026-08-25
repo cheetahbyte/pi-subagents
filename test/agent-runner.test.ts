@@ -33,6 +33,10 @@ const {
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
   createAgentSession,
+  // runAgent builds its custom tools via defineTool (child→parent question
+  // tools); the pass-through keeps the tool objects intact for customTools/name
+  // assertions.
+  defineTool: (tool: any) => tool,
   // Mock loader simulates pi-mono: reload() applies additionalExtensionPaths
   // (an unknown path becomes an error row, mirroring a failed load) and then
   // runs extensionsOverride over the result.
@@ -115,9 +119,11 @@ vi.mock("../src/nested-tools.js", () => ({
     { name: "Agent" },
     { name: "get_subagent_result" },
     { name: "steer_subagent" },
+    { name: "answer_subagent_question" },
   ]),
 }));
 
+import { AGENT_QUESTION_TOOL_NAMES } from "../src/agent-question-tools.js";
 import {
   extensionCanonicalName,
   extensionCanonicalNames,
@@ -991,17 +997,24 @@ describe("agent-runner master tool allowlist", () => {
     vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: true }));
     vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
     withExtensions({
-      "/ext/evil.ts": ["Agent", "get_subagent_result", "steer_subagent", "ok_ext"],
+      "/ext/evil.ts": [
+        "Agent", "get_subagent_result", "steer_subagent",
+        "ask_parent", "answer_subagent_question", "ok_ext",
+      ],
     });
     const { session } = createSession("OK");
     createAgentSession.mockResolvedValue({ session });
 
     await runAgent(ctx, "Explore", "go", { pi });
 
+    // This session injected none of them, so the extension's same-named tools
+    // must be reserved out — the question names are EXCLUDED_TOOL_NAMES too.
     const tools = lastToolsPassed();
     expect(tools).not.toContain("Agent");
     expect(tools).not.toContain("get_subagent_result");
     expect(tools).not.toContain("steer_subagent");
+    expect(tools).not.toContain("ask_parent");
+    expect(tools).not.toContain("answer_subagent_question");
     expect(tools).toContain("ok_ext");
   });
 
@@ -1020,6 +1033,200 @@ describe("agent-runner master tool allowlist", () => {
     expect(createNestedSubagentTools).not.toHaveBeenCalled();
     expect(lastToolsPassed()).not.toContain("Agent");
     expect(createAgentSession.mock.calls[0][0].customTools).toEqual([]);
+  });
+
+  // The child→parent question tool has a different gate than the nested
+  // delegation set: it needs a manager and the child's own id, but NOT
+  // allowed_subagents and NOT non-isolation. Its parent (the spawner) is
+  // whoever the manager says, so the allowlist/no-extension concerns that gate
+  // the Agent tool are irrelevant to it.
+
+  it("injects ask_parent into every child session with a manager and its own id — even without allowed_subagents", async () => {
+    vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: false }));
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: false }));
+    vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+    const { session } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "go", {
+      pi,
+      agentId: "child-1",
+      nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1 },
+    });
+
+    // No delegation tools (no allowed_subagents) — but the question tool still
+    // lands, and the answer tool stays out (it ships only with nested tooling).
+    expect(createNestedSubagentTools).not.toHaveBeenCalled();
+    const tools = lastToolsPassed();
+    expect(tools).toContain("ask_parent");
+    expect(tools).not.toContain("answer_subagent_question");
+    expect(tools).not.toContain("Agent");
+  });
+
+  it("injects ask_parent in isolated mode too", async () => {
+    // Isolation suppresses extensions and the nested delegation set; the
+    // parent is the manager, not an extension, so asking still works.
+    vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: false }));
+    vi.mocked(getAgentConfig).mockReturnValueOnce(
+      makeAgentConfig({ extensions: false, allowedSubagents: "all" }),
+    );
+    vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+    const { session } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "go", {
+      pi,
+      agentId: "child-1",
+      isolated: true,
+      nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1 },
+    });
+
+    expect(createNestedSubagentTools).not.toHaveBeenCalled();
+    const tools = lastToolsPassed();
+    expect(tools).toContain("ask_parent");
+    expect(tools).not.toContain("Agent");
+    expect(tools).not.toContain("answer_subagent_question");
+  });
+
+  it("keeps ask_parent callable under extensions despite the active-set renarrow", async () => {
+    // inScope() derives the active set from config builtins + extension tools;
+    // ask_parent is a customTool, so it survives only via the re-admission.
+    vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: true }));
+    vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+    withExtensions({ "/ext/ok.ts": ["ok_ext"] });
+    const { session } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "go", {
+      pi,
+      agentId: "child-1",
+      nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1 },
+    });
+
+    // Not stripped from the registry gate.
+    expect(createAgentSession.mock.calls[0][0].excludeTools ?? []).not.toContain("ask_parent");
+    // And not dropped by the renarrow.
+    const active = lastToolsPassed();
+    expect(active).toContain("ask_parent");
+    expect(active).toContain("ok_ext");
+    expect(active).not.toContain("answer_subagent_question");
+  });
+
+  it("re-admits reserved question names only where the real tool was injected", async () => {
+    // The question names are EXCLUDED_TOOL_NAMES-reserved, so even an extension
+    // registering them can't open them — the per-session re-admission is the
+    // only gate, and it admits exactly what this session injected: ask_parent
+    // for a child with a manager and own id, never the answer tool without
+    // nested tooling.
+    vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: true }));
+    vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+    withExtensions({ "/ext/collide.ts": ["ask_parent", "answer_subagent_question", "ok_ext"] });
+    const { session } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "go", {
+      pi,
+      agentId: "child-1",
+      nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1 },
+    });
+
+    const opts = createAgentSession.mock.calls[0][0];
+    // ask_parent was injected → not denied at the registry gate...
+    expect(opts.excludeTools ?? []).not.toContain("ask_parent");
+    // answer_subagent_question was not (no allowed_subagents) → denied even
+    // though the extension registers it.
+    expect(opts.excludeTools ?? []).toContain("answer_subagent_question");
+    const active = lastToolsPassed();
+    expect(active).toContain("ask_parent");
+    expect(active).not.toContain("answer_subagent_question");
+    expect(active).toContain("ok_ext");
+  });
+
+  it("skips ask_parent when the session has no manager or no own id", async () => {
+    vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: false }));
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: false }));
+    vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+    const { session } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    // Manager present, no agentId.
+    await runAgent(ctx, "Explore", "go", {
+      pi,
+      nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1 },
+    });
+    expect(lastToolsPassed()).not.toContain("ask_parent");
+
+    createAgentSession.mockClear();
+    // Own id present, no manager runtime.
+    await runAgent(ctx, "Explore", "go", { pi, agentId: "child-1" });
+    expect(lastToolsPassed()).not.toContain("ask_parent");
+  });
+
+  it("still ships both question tools when opted into nested delegation", async () => {
+    // With allowed_subagents + nested runtime + own id, the parent gets the
+    // answer tool (via the nested set) AND the child side of the round trip.
+    vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: false }));
+    vi.mocked(getAgentConfig).mockReturnValueOnce(
+      makeAgentConfig({ extensions: false, allowedSubagents: ["scout"] }),
+    );
+    vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+    const { session } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "go", {
+      pi,
+      agentId: "child-1",
+      nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1, maxSubagentDepth: 3 },
+    });
+
+    // 4 nested + 1 ask_parent.
+    expect(createAgentSession.mock.calls[0][0].customTools).toHaveLength(5);
+    const tools = lastToolsPassed();
+    expect(tools).toEqual(expect.arrayContaining([
+      "Agent", "get_subagent_result", "steer_subagent",
+      "answer_subagent_question", "ask_parent",
+    ]));
+  });
+
+  it("disallowed_tools may deny ask_parent under the static allowlist", async () => {
+    vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: false }));
+    vi.mocked(getAgentConfig).mockReturnValueOnce(
+      makeAgentConfig({ extensions: false, disallowedTools: ["ask_parent"] }),
+    );
+    vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+    const { session } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "go", {
+      pi,
+      agentId: "child-1",
+      nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1 },
+    });
+
+    expect(lastToolsPassed()).not.toContain("ask_parent");
+  });
+
+  it("disallowed_tools may deny ask_parent at the extensions registry gate", async () => {
+    vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
+    vi.mocked(getAgentConfig).mockReturnValueOnce(
+      makeAgentConfig({ extensions: true, disallowedTools: ["ask_parent"] }),
+    );
+    vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+    withExtensions({ "/ext/ok.ts": ["ok_ext"] });
+    const { session } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "go", {
+      pi,
+      agentId: "child-1",
+      nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1 },
+    });
+
+    const opts = createAgentSession.mock.calls[0][0];
+    expect(opts.excludeTools ?? []).toContain("ask_parent");
+    expect(lastToolsPassed()).not.toContain("ask_parent");
   });
 
   it("injects scoped nested tools for an opted-in non-isolated agent", async () => {
@@ -1046,9 +1253,11 @@ describe("agent-runner master tool allowlist", () => {
       configCwd: "/tmp",
     }));
     expect(lastToolsPassed()).toEqual(expect.arrayContaining([
-      "Agent", "get_subagent_result", "steer_subagent",
+      "Agent", "get_subagent_result", "steer_subagent", "answer_subagent_question",
     ]));
-    expect(createAgentSession.mock.calls[0][0].customTools).toHaveLength(3);
+    // No agentId supplied, so the child-side ask_parent stays out; only the
+    // four nested tools are customTools.
+    expect(createAgentSession.mock.calls[0][0].customTools).toHaveLength(4);
   });
 
   it("keeps opt-in nested tools active UNDER EXTENSIONS despite the EXCLUDED-name collision", async () => {
@@ -1072,10 +1281,10 @@ describe("agent-runner master tool allowlist", () => {
     const opts = createAgentSession.mock.calls[0][0];
     // (a) not denied at the registry gate, and passed as customTools.
     expect(opts.excludeTools ?? []).not.toContain("Agent");
-    expect(opts.customTools).toHaveLength(3);
+    expect(opts.customTools).toHaveLength(4);
     // (b) survive the active-set renarrow alongside a real extension tool.
     const active = lastToolsPassed();
-    expect(active).toEqual(expect.arrayContaining(["Agent", "get_subagent_result", "steer_subagent"]));
+    expect(active).toEqual(expect.arrayContaining(["Agent", "get_subagent_result", "steer_subagent", "answer_subagent_question"]));
     expect(active).toContain("ok_ext");
   });
 
@@ -1284,7 +1493,7 @@ describe("agent-runner master tool allowlist", () => {
     const opts = createAgentSession.mock.calls[0][0];
     expect(opts.tools).toBeUndefined();
     expect(new Set(opts.excludeTools)).toEqual(
-      new Set([...Object.values(SUBAGENT_TOOL_NAMES), "bash"]),
+      new Set([...Object.values(SUBAGENT_TOOL_NAMES), "bash", ...Object.values(AGENT_QUESTION_TOOL_NAMES)]),
     );
 
     // The active set is repaired AFTER bindExtensions (tools may register during

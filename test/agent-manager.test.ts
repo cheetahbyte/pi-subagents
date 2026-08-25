@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentManager } from "../src/agent-manager.js";
+import { AgentManager, type AgentQuestion } from "../src/agent-manager.js";
+import { createAnswerSubagentQuestionTool } from "../src/agent-question-tools.js";
+import type { RunResult } from "../src/agent-runner.js";
 import type { AgentRecord } from "../src/types.js";
 
 vi.mock("../src/agent-runner.js", () => ({
@@ -2141,5 +2143,518 @@ describe("AgentManager — effective model and thinking write-back", () => {
     const record = await spawnWithSession({ thinking: "max" }, {});
 
     expect(record.invocation).toEqual({ thinking: "max" });
+  });
+});
+
+describe("AgentManager — pending parent questions", () => {
+  let manager: AgentManager;
+  const seen: AgentQuestion[] = [];
+
+  afterEach(() => {
+    seen.length = 0;
+    manager?.dispose();
+  });
+
+  /** Private-field read for verification — the question registries are internals. */
+  function questionRegistries(manager: AgentManager): {
+    pendingQuestions: Map<string, AgentQuestion>;
+    pendingByChild: Map<string, string>;
+  } {
+    return manager as unknown as {
+      pendingQuestions: Map<string, AgentQuestion>;
+      pendingByChild: Map<string, string>;
+    };
+  }
+
+  /** Spawn an agent whose run never settles (stays "running" for the test). */
+  function spawnLive(prompt: string, parentId?: string): string {
+    vi.mocked(runAgent).mockImplementation(() => new Promise<RunResult>(() => {}));
+    return manager.spawn(mockPi, mockCtx, parentId === undefined ? "general-purpose" : "scout", prompt, {
+      description: prompt,
+      isBackground: true,
+      ...(parentId !== undefined && { parentAgentId: parentId, depth: 2 }),
+    });
+  }
+
+  function withOnQuestion(cb: (q: AgentQuestion) => void) {
+    manager = new AgentManager(undefined, undefined, undefined, undefined, undefined, (q) => { seen.push(q); cb(q); });
+    return manager;
+  }
+
+  const last = () => seen[seen.length - 1];
+
+  it("resolves via answerQuestion; payload is rich but free of resolve/reject", async () => {
+    withOnQuestion(() => {});
+    // Top-level: the root callback receives the full, plain payload.
+    const childId = spawnLive("child");
+
+    const promise = manager.askParent(childId, "which repo?");
+
+    const q = last();
+    expect(q).toMatchObject({
+      id: expect.any(String),
+      childAgentId: childId,
+      parentAgentId: undefined,
+      question: "which repo?",
+      createdAt: expect.any(Number),
+    });
+    expect("resolve" in q).toBe(false);
+    expect("reject" in q).toBe(false);
+
+    manager.answerQuestion(q.id, "pi-subagents");
+    await expect(promise).resolves.toBe("pi-subagents");
+  });
+
+  it("only the question's parent (or root) may answer", async () => {
+    withOnQuestion(() => {});
+    const parentId = spawnLive("parent");
+    const childId = spawnLive("child", parentId);
+
+    const promise = manager.askParent(childId, "q");
+    const qid = questionRegistries(manager).pendingByChild.get(childId)!;
+
+    // A foreign agent, and the root session, are both refused for a nested child.
+    expect(() => manager.answerQuestion(qid, "x", "some-other-agent")).toThrow(/not the parent/);
+    expect(() => manager.answerQuestion(qid, "x")).toThrow(/not the parent/);
+    // The actual parent may answer.
+    manager.answerQuestion(qid, "yes", parentId);
+    await expect(promise).resolves.toBe("yes");
+
+    // A top-level child's parent IS root: only the undefined responder works.
+    const rootChildId = spawnLive("rootChild");
+    const rootPromise = manager.askParent(rootChildId, "root q");
+    const rootQ = last();
+    expect(() => manager.answerQuestion(rootQ.id, "x", "some-other-agent")).toThrow(/not the parent/);
+    manager.answerQuestion(rootQ.id, "root answer");
+    await expect(rootPromise).resolves.toBe("root answer");
+  });
+
+  it("rejects a second pending question from the same child, then allows one again", async () => {
+    withOnQuestion(() => {});
+    const childId = spawnLive("child");
+
+    const first = manager.askParent(childId, "one");
+    await expect(manager.askParent(childId, "two")).rejects.toThrow(/already has a pending question/);
+
+    const q = last();
+    manager.answerQuestion(q.id, "answer", undefined);
+    await expect(first).resolves.toBe("answer");
+
+    // Settled — the child may ask again.
+    const again = manager.askParent(childId, "three");
+    manager.answerQuestion(last().id, "ok");
+    await expect(again).resolves.toBe("ok");
+  });
+
+  it("rejects (as a Promise, never a sync throw) unknown and duplicate children", async () => {
+    withOnQuestion(() => {});
+
+    // Unknown child: a rejected promise, not a synchronous throw.
+    let unknown!: Promise<string>;
+    expect(() => { unknown = manager.askParent("ghost", "q"); }).not.toThrow();
+    await expect(unknown).rejects.toThrow(/Unknown agent/);
+
+    // Duplicate pending question: a rejection too, not a sync throw.
+    const dupChild = spawnLive("dup");
+    const first = manager.askParent(dupChild, "one");
+    let dup!: Promise<string>;
+    expect(() => { dup = manager.askParent(dupChild, "two"); }).not.toThrow();
+    await expect(dup).rejects.toThrow(/already has a pending question/);
+    manager.answerQuestion(last().id, "ok");
+    await expect(first).resolves.toBe("ok");
+
+    // A stopped child can no longer ask — rejects instead of registering a
+    // question nothing would ever cancel.
+    const stoppedChild = spawnLive("stopped");
+    manager.abort(stoppedChild);
+    await expect(manager.askParent(stoppedChild, "q")).rejects.toThrow(/not running/);
+  });
+
+  it("does not register a question for a child that already settled", async () => {
+    withOnQuestion(() => {});
+    let resolveChild!: (result: RunResult) => void;
+    vi.mocked(runAgent).mockImplementation((_ctx, _type, prompt) =>
+      new Promise<RunResult>((res) => {
+        if (prompt === "done") resolveChild = res;
+      }),
+    );
+    const childId = manager.spawn(mockPi, mockCtx, "general-purpose", "done", {
+      description: "done",
+      isBackground: true,
+    });
+    resolveChild({ responseText: "done", session: mockSession(), aborted: false, steered: false });
+    await manager.getRecord(childId)!.promise;
+
+    await expect(manager.askParent(childId, "q")).rejects.toThrow(/not running/);
+    // Nothing was registered while the child was unreachable.
+    expect(questionRegistries(manager).pendingQuestions.size).toBe(0);
+  });
+
+  it("a throwing onQuestion cancels (and unregisters) the question", async () => {
+    withOnQuestion((q) => { if (q.question === "bad") throw new Error("cancel"); });
+    const childId = spawnLive("child");
+
+    const bad = manager.askParent(childId, "bad");
+    await expect(bad).rejects.toThrow("cancel");
+    const badId = last().id;
+    expect(() => manager.answerQuestion(badId, "x")).toThrow(/No pending question/);
+
+    // The registry was not leaked — a fresh question proceeds normally.
+    const good = manager.askParent(childId, "good");
+    manager.answerQuestion(last().id, "ok");
+    await expect(good).resolves.toBe("ok");
+  });
+
+  it("aborting the caller's signal rejects the question and cleans up", async () => {
+    withOnQuestion(() => {});
+    const childId = spawnLive("child");
+
+    const controller = new AbortController();
+    const promise = manager.askParent(childId, "q", controller.signal);
+    const qid = last().id;
+    controller.abort();
+    await expect(promise).rejects.toBe(controller.signal.reason);
+    expect(() => manager.answerQuestion(qid, "x")).toThrow(/No pending question/);
+  });
+
+  it("cancels a child's pending question when the child settles", async () => {
+    withOnQuestion(() => {});
+    let resolveChild!: (result: RunResult) => void;
+    vi.mocked(runAgent).mockImplementation((_ctx, _type, prompt) =>
+      new Promise<RunResult>((res) => {
+        if (prompt === "child") resolveChild = res;
+      }),
+    );
+    const parentId = manager.spawn(mockPi, mockCtx, "general-purpose", "parent", {
+      description: "parent", isBackground: true,
+    });
+    const childId = manager.spawn(mockPi, mockCtx, "scout", "child", {
+      description: "child", isBackground: true, parentAgentId: parentId,
+    });
+
+    const promise = manager.askParent(childId, "help");
+    const qid = questionRegistries(manager).pendingByChild.get(childId)!;
+
+    resolveChild({ responseText: "done", session: mockSession(), aborted: false, steered: false });
+    await manager.getRecord(childId)!.promise;
+
+    await expect(promise).rejects.toThrow();
+    expect(() => manager.answerQuestion(qid, "late", parentId)).toThrow(/No pending question/);
+  });
+
+  it("cancels a question its child asked when the parent settles", async () => {
+    withOnQuestion(() => {});
+    let resolveParent!: (result: RunResult) => void;
+    vi.mocked(runAgent).mockImplementation((_ctx, _type, prompt, opts) =>
+      new Promise<RunResult>((res) => {
+        if (prompt === "parent") {
+          resolveParent = () => res({ responseText: "done", session: mockSession(), aborted: false, steered: false });
+        } else if (prompt === "child") {
+          // A real nested child settles when its parent aborts it.
+          opts?.signal?.addEventListener?.("abort", () =>
+            res({ responseText: "", session: mockSession(), aborted: true, steered: false }),
+          );
+        }
+      }),
+    );
+    const parentId = manager.spawn(mockPi, mockCtx, "general-purpose", "parent", {
+      description: "parent", isBackground: true,
+    });
+    const childId = manager.spawn(mockPi, mockCtx, "scout", "child", {
+      description: "child", isBackground: true, parentAgentId: parentId,
+    });
+
+    const promise = manager.askParent(childId, "question?");
+    const qid = questionRegistries(manager).pendingByChild.get(childId)!;
+
+    resolveParent();
+    await manager.getRecord(parentId)!.promise;
+    await manager.getRecord(childId)!.promise;
+
+    await expect(promise).rejects.toThrow();
+    expect(() => manager.answerQuestion(qid, "late", parentId)).toThrow(/No pending question/);
+  });
+
+  it("direct abort and abortAll cancel pending questions", async () => {
+    withOnQuestion(() => {});
+    const parentId = spawnLive("parent");
+    const childId = spawnLive("child", parentId);
+
+    const p1 = manager.askParent(childId, "one");
+    const q1 = questionRegistries(manager).pendingByChild.get(childId)!;
+    expect(manager.abort(childId)).toBe(true);
+    await expect(p1).rejects.toThrow();
+    expect(() => manager.answerQuestion(q1, "x", parentId)).toThrow(/No pending question/);
+
+    const child2 = spawnLive("child2", parentId);
+    const p2 = manager.askParent(child2, "two");
+    manager.abortAll();
+    await expect(p2).rejects.toThrow();
+  });
+
+  it("abort cancels before firing the controller, so reentrant listeners can't answer a live question", async () => {
+    withOnQuestion(() => {});
+    const parentId = spawnLive("parent");
+    const childId = spawnLive("child", parentId);
+
+    const promise = manager.askParent(childId, "q");
+    const qid = questionRegistries(manager).pendingByChild.get(childId)!;
+
+    // A reentrant abort listener that would answer the question if it were
+    // still live when the controller fires.
+    const reentrant = () => {
+      try { manager.answerQuestion(qid, "too late", parentId); } catch { /* already cancelled */ }
+    };
+    manager.getRecord(childId)!.abortController!.signal.addEventListener("abort", reentrant, { once: true });
+
+    manager.abort(childId);
+
+    // The reentrant answer did NOT resolve the question — it was cancelled first.
+    await expect(promise).rejects.toThrow();
+    expect(() => manager.answerQuestion(qid, "x", parentId)).toThrow(/No pending question/);
+  });
+
+  it("rejects answering a missing or already-settled question", async () => {
+    withOnQuestion(() => {});
+    const parentId = spawnLive("parent");
+    const childId = spawnLive("child", parentId);
+
+    const promise = manager.askParent(childId, "q");
+    const qid = questionRegistries(manager).pendingByChild.get(childId)!;
+
+    expect(() => manager.answerQuestion("nope", "x")).toThrow(/No pending question/);
+    manager.answerQuestion(qid, "answer", parentId);
+    // Repeated answer: question is gone from the registry.
+    expect(() => manager.answerQuestion(qid, "again", parentId)).toThrow(/No pending question/);
+    await expect(promise).resolves.toBe("answer");
+  });
+
+  it("disposal rejects pending questions and empties both registries", async () => {
+    withOnQuestion(() => {});
+    const parentId = spawnLive("parent");
+    const childId = spawnLive("child", parentId);
+
+    const promise = manager.askParent(childId, "q");
+    const qid = questionRegistries(manager).pendingByChild.get(childId)!;
+
+    await manager.dispose();
+
+    await expect(promise).rejects.toThrow(/disposed/);
+    // Registry cleaned up, not just the promise settled.
+    const { pendingQuestions, pendingByChild } = questionRegistries(manager);
+    expect(pendingQuestions.size).toBe(0);
+    expect(pendingByChild.size).toBe(0);
+    // Behaviorally: the question is no longer addressable at all.
+    expect(() => manager.answerQuestion(qid, "x", parentId)).toThrow(/No pending question/);
+  });
+
+  it("steers the exact running parent session with an actionable answer hint", async () => {
+    withOnQuestion(() => {});
+    const steer = vi.fn().mockResolvedValue(undefined);
+    let captureSession: ((session: { steer: typeof steer; dispose: () => void }) => void) | undefined;
+    vi.mocked(runAgent).mockImplementation((_ctx, _type, prompt, opts) => {
+      if (prompt === "parent") {
+        captureSession = (session) => opts?.onSessionCreated?.(session);
+      }
+      return new Promise(() => {});
+    });
+    const parentId = manager.spawn(mockPi, mockCtx, "general-purpose", "parent", {
+      description: "parent", isBackground: true,
+    });
+    const childId = manager.spawn(mockPi, mockCtx, "scout", "child", {
+      description: "child", isBackground: true, parentAgentId: parentId,
+    });
+    captureSession!({ steer, dispose: vi.fn() });
+
+    const promise = manager.askParent(childId, "which repo?");
+
+    // The exact parent was steered — the root onQuestion callback was not.
+    const qid = questionRegistries(manager).pendingByChild.get(childId)!;
+    expect(steer).toHaveBeenCalledTimes(1);
+    const message = String(steer.mock.calls[0][0]);
+    expect(message).toContain(qid);
+    expect(message).toContain("scout");
+    expect(message).toContain("child");
+    expect(message).toContain("which repo?");
+    expect(message).toContain("answer_subagent_question");
+    expect(seen).toHaveLength(0);
+
+    // The parent answers through the same answer_subagent_question path.
+    manager.answerQuestion(qid, "pi-subagents", parentId);
+    await expect(promise).resolves.toBe("pi-subagents");
+
+    // Top-level questions still reach the root callback.
+    const rootChild = spawnLive("rootChild");
+    const rootPromise = manager.askParent(rootChild, "root q");
+    expect(seen).toHaveLength(1);
+    manager.answerQuestion(last().id, "ok");
+    await expect(rootPromise).resolves.toBe("ok");
+  });
+
+  it("round-trips a nested question through the parent's real answer tool", async () => {
+    withOnQuestion(() => {});
+    const steer = vi.fn().mockResolvedValue(undefined);
+    let captureSession: ((session: { steer: typeof steer; dispose: () => void }) => void) | undefined;
+    vi.mocked(runAgent).mockImplementation((_ctx, _type, prompt, opts) => {
+      if (prompt === "parent") {
+        captureSession = (session) => opts?.onSessionCreated?.(session);
+      }
+      return new Promise(() => {});
+    });
+    const parentId = manager.spawn(mockPi, mockCtx, "general-purpose", "parent", {
+      description: "parent", isBackground: true,
+    });
+    const childId = manager.spawn(mockPi, mockCtx, "scout", "child", {
+      description: "child", isBackground: true, parentAgentId: parentId,
+    });
+    const siblingId = manager.spawn(mockPi, mockCtx, "scout", "sibling", {
+      description: "sibling", isBackground: true, parentAgentId: parentId,
+    });
+    captureSession!({ steer, dispose: vi.fn() });
+
+    // Delivered to the live parent session, exactly as the manager test above.
+    const promise = manager.askParent(childId, "which repo?");
+    const qid = questionRegistries(manager).pendingByChild.get(childId)!;
+    expect(steer).toHaveBeenCalledTimes(1);
+
+    // The scoped parent's real answer tool — the same factory the nested
+    // tooling injects — is the only responder that can settle the question.
+    const siblingAnswer = createAnswerSubagentQuestionTool(manager, siblingId);
+    const siblingResult = await siblingAnswer.execute(
+      "tc-sibling", { question_id: qid, answer: "not yours" }, undefined, undefined, mockCtx,
+    );
+    expect(siblingResult.isError).toBe(true);
+    expect(siblingResult.content[0].text).toContain("not the parent");
+
+    const rootAnswer = createAnswerSubagentQuestionTool(manager, undefined);
+    const rootResult = await rootAnswer.execute(
+      "tc-root", { question_id: qid, answer: "not yours" }, undefined, undefined, mockCtx,
+    );
+    expect(rootResult.isError).toBe(true);
+    expect(rootResult.content[0].text).toContain("not the parent");
+
+    const parentAnswer = createAnswerSubagentQuestionTool(manager, parentId);
+    const ok = await parentAnswer.execute(
+      "tc-answer", { question_id: qid, answer: "pi-subagents" }, undefined, undefined, mockCtx,
+    );
+    expect(ok.isError).toBe(false);
+    await expect(promise).resolves.toBe("pi-subagents");
+  });
+
+  it("settles the question when the immediate parent steer rejects", async () => {
+    withOnQuestion(() => {});
+    // A torn-down parent session rejects the steer — the question must not
+    // stay pending for a parent that never saw it.
+    const steer = vi.fn().mockRejectedValue(new Error("session gone"));
+    let captureSession: ((session: { steer: typeof steer; dispose: () => void }) => void) | undefined;
+    vi.mocked(runAgent).mockImplementation((_ctx, _type, prompt, opts) => {
+      if (prompt === "parent") {
+        captureSession = (session) => opts?.onSessionCreated?.(session);
+      }
+      return new Promise(() => {});
+    });
+    const parentId = manager.spawn(mockPi, mockCtx, "general-purpose", "parent", {
+      description: "parent", isBackground: true,
+    });
+    const childId = manager.spawn(mockPi, mockCtx, "scout", "child", {
+      description: "child", isBackground: true, parentAgentId: parentId,
+    });
+    captureSession!({ steer, dispose: vi.fn() });
+
+    const promise = manager.askParent(childId, "still there?");
+
+    await expect(promise).rejects.toThrow(/Could not deliver/);
+    // Registry cleaned up, not just the promise settled — nothing can answer
+    // a question the parent never received.
+    const { pendingQuestions, pendingByChild } = questionRegistries(manager);
+    expect(pendingQuestions.size).toBe(0);
+    expect(pendingByChild.size).toBe(0);
+    expect(steer).toHaveBeenCalledTimes(1);
+  });
+
+  it("queues the parent steer before the session exists, flushing when it is created", async () => {
+    withOnQuestion(() => {});
+    const steer = vi.fn().mockResolvedValue(undefined);
+    let release: (() => void) | undefined;
+    vi.mocked(runAgent).mockImplementation((_ctx, _type, prompt, opts) =>
+      new Promise((resolve) => {
+        if (prompt === "parent") {
+          release = () => {
+            opts?.onSessionCreated?.({ steer, dispose: vi.fn() });
+            resolve({ responseText: "ok", session: mockSession(), aborted: false, steered: false });
+          };
+        }
+      }),
+    );
+    const parentId = manager.spawn(mockPi, mockCtx, "general-purpose", "parent", {
+      description: "parent", isBackground: true,
+    });
+    const childId = manager.spawn(mockPi, mockCtx, "scout", "child", {
+      description: "child", isBackground: true, parentAgentId: parentId,
+    });
+    const parentRecord = manager.getRecord(parentId)!;
+
+    // Parent running but session not created yet — the steer parks on
+    // pendingSteers instead of being dropped.
+    const promise = manager.askParent(childId, "question?");
+    const qid = questionRegistries(manager).pendingByChild.get(childId)!;
+    expect(steer).not.toHaveBeenCalled();
+    expect(parentRecord.pendingSteers).toEqual([expect.stringContaining(qid)]);
+    expect(seen).toHaveLength(0);
+
+    // Session creation flushes the parked steer to the live session.
+    release!();
+    expect(steer).toHaveBeenCalledTimes(1);
+    expect(String(steer.mock.calls[0][0])).toContain(qid);
+    expect(parentRecord.pendingSteers).toBeUndefined();
+
+    manager.answerQuestion(qid, "answer", parentId);
+    await expect(promise).resolves.toBe("answer");
+  });
+
+  it("rejects when the parent is absent or no longer running — never reroutes to root or an ancestor", async () => {
+    withOnQuestion(() => {});
+    // Ghost parent: no record exists — reject without delivering anywhere.
+    const ghostChild = spawnLive("ghostChild", "ghost-parent");
+    const ghostPromise = manager.askParent(ghostChild, "q1");
+    await expect(ghostPromise).rejects.toThrow(/no longer available/);
+    expect(questionRegistries(manager).pendingQuestions.size).toBe(0);
+    expect(seen).toHaveLength(0);
+
+    // Completed parent with a live grandparent: the question must not be
+    // rerouted upward — neither into the grandparent's session nor the root
+    // callback — and is rejected immediately instead.
+    const grandSteer = vi.fn().mockResolvedValue(undefined);
+    let captureGrand: ((session: { steer: typeof grandSteer; dispose: () => void }) => void) | undefined;
+    vi.mocked(runAgent).mockImplementation((_ctx, _type, prompt, opts) => {
+      if (prompt === "grand") {
+        captureGrand = (session) => opts?.onSessionCreated?.(session);
+        return new Promise(() => {});
+      }
+      if (prompt === "doneParent") {
+        return Promise.resolve({ responseText: "done", session: mockSession(), aborted: false, steered: false });
+      }
+      return new Promise(() => {});
+    });
+    manager.spawn(mockPi, mockCtx, "general-purpose", "grand", {
+      description: "grand", isBackground: true,
+    });
+    captureGrand!({ steer: grandSteer, dispose: vi.fn() });
+    const doneParent = manager.spawn(mockPi, mockCtx, "general-purpose", "doneParent", {
+      description: "done", isBackground: true,
+    });
+    await manager.getRecord(doneParent)!.promise;
+    expect(manager.getRecord(doneParent)!.status).toBe("completed");
+    const childId = manager.spawn(mockPi, mockCtx, "scout", "child", {
+      description: "child", isBackground: true, parentAgentId: doneParent,
+    });
+
+    const promise = manager.askParent(childId, "q2");
+    await expect(promise).rejects.toThrow(/no longer available/);
+    expect(grandSteer).not.toHaveBeenCalled();
+    expect(seen).toHaveLength(0);
+    const { pendingQuestions, pendingByChild } = questionRegistries(manager);
+    expect(pendingQuestions.size).toBe(0);
+    expect(pendingByChild.size).toBe(0);
   });
 });

@@ -41,6 +41,40 @@ export type OnAgentCompact = (record: AgentRecord, info: CompactionInfo) => void
 export type OnAgentUsage = (record: AgentRecord, usage: LifetimeUsage) => void;
 export type CompactionInfo = { reason: "manual" | "threshold" | "overflow"; tokensBefore: number };
 
+/** A question a nested child has asked a parent, delivered to `onQuestion`. */
+export type AgentQuestion = {
+  id: string;
+  childAgentId: string;
+  parentAgentId: string | undefined;
+  question: string;
+  createdAt: number;
+};
+
+export type OnAgentQuestion = (question: AgentQuestion) => void;
+
+/** Internal bookkeeping layered under an `AgentQuestion`: settlement + delivery. */
+interface PendingAgentQuestion extends AgentQuestion {
+  settled: boolean;
+  /** Removes the abort listener added in `askParent`. */
+  detachSignal?: () => void;
+  resolve: (answer: string) => void;
+  reject: (reason: unknown) => void;
+}
+
+/**
+ * The plain-text steer a nested child's question becomes: exact question id,
+ * the child's identity and description, the question itself, and the tool call
+ * that answers it — rendered for the parent model to act on.
+ */
+function formatParentSteer(record: PendingAgentQuestion, child?: AgentRecord): string {
+  const childIdentity = child ? `${child.type} — ${child.description}` : record.childAgentId;
+  return [
+    `Your child agent (${childIdentity}) asked you a question — question id "${record.id}":`,
+    record.question,
+    `Answer it with the answer_subagent_question tool: question_id "${record.id}", answer "<your answer>".`,
+  ].join("\n");
+}
+
 /**
  * Default max concurrent background agents.
  *
@@ -310,6 +344,7 @@ export class AgentManager {
   private onStart?: OnAgentStart;
   private onCompact?: OnAgentCompact;
   private onUsage?: OnAgentUsage;
+  private onQuestion?: OnAgentQuestion;
   private maxConcurrent: number;
   private maxConcurrentForeground = DEFAULT_MAX_CONCURRENT_FOREGROUND;
   /** Base repos worktrees were created from — so dispose() can prune them all,
@@ -340,17 +375,29 @@ export class AgentManager {
   /** Number of currently running foreground (blocking) agents. */
   private runningForeground = 0;
 
+  /**
+   * Questions a child agent has asked its parent, awaiting an answer via
+   * `answerQuestion`. Two indexes over the same set: by question id (the only
+   * way in is by id) and by child agent id (to enforce one pending question per
+   * child and to cancel on that child's settlement). All removals are
+   * single-sourced through `settleQuestion`, so the indexes can never disagree.
+   */
+  private pendingQuestions = new Map<string, PendingAgentQuestion>();
+  private pendingByChild = new Map<string, string>();
+
   constructor(
     onComplete?: OnAgentComplete,
     maxConcurrent = DEFAULT_MAX_CONCURRENT,
     onStart?: OnAgentStart,
     onCompact?: OnAgentCompact,
     onUsage?: OnAgentUsage,
+    onQuestion?: OnAgentQuestion,
   ) {
     this.onComplete = onComplete;
     this.onStart = onStart;
     this.onCompact = onCompact;
     this.onUsage = onUsage;
+    this.onQuestion = onQuestion;
     this.maxConcurrent = maxConcurrent;
     // Cleanup completed agents after 10 minutes (but keep sessions for resume)
     this.cleanupInterval = setInterval(() => this.cleanup(), 60_000);
@@ -729,6 +776,9 @@ export class AgentManager {
         }
 
         this.abortOwnedChildren(id);
+        // A settled child's pending question could never be answered — its
+        // parent is gone or about to be, and the child itself is done waiting.
+        this.cancelQuestionsForAgent(id);
 
         this.settleRun(record, true, pool);
         return responseText;
@@ -758,6 +808,7 @@ export class AgentManager {
         }
 
         this.abortOwnedChildren(id);
+        this.cancelQuestionsForAgent(id);
 
         this.settleRun(record, false, pool);
         return "";
@@ -1011,6 +1062,7 @@ export class AgentManager {
     // Same contract as the spawn settle paths: children spawned during the
     // resumed turn must not outlive it — nothing else can see or reach them.
     this.abortOwnedChildren(id);
+    this.cancelQuestionsForAgent(id);
 
     return record;
   }
@@ -1065,6 +1117,7 @@ export class AgentManager {
       }
       // Children spawned during the resumed turn must not outlive it.
       this.abortOwnedChildren(id);
+      this.cancelQuestionsForAgent(id);
       if (occupiesPoolSlot(record)) this.runningBackground--;
       try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
       this.drainQueue();
@@ -1220,19 +1273,206 @@ export class AgentManager {
       this.dequeue(q => q.id === id);
       record.status = "stopped";
       record.completedAt = Date.now();
+      this.cancelQuestionsForAgent(id);
       return true;
     }
 
     if (record.status !== "running") return false;
-    record.abortController?.abort();
+    // Order matters: mark stopped and cancel the question BEFORE firing the
+    // controller, so reentrant abort listeners (a child settling synchronously
+    // off its controller) find the question already settled instead of
+    // answering a still-live one.
     record.status = "stopped";
     record.completedAt = Date.now();
+    this.cancelQuestionsForAgent(id);
+    record.abortController?.abort();
     return true;
+  }
+
+  /**
+   * A child asks a question its parent must answer. Top-level questions notify
+   * via `onQuestion` (the root session answers); nested questions are steered
+   * straight to the exact parent record instead. Either way the parent answers
+   * through `answerQuestion`.
+   *
+   * The returned promise settles with the answer, or rejects when the question
+   * is cancelled (parent/child settlement, abort, abortAll, disposal, an
+   * `onQuestion` throw), the parent is absent or no longer live, or the
+   * caller's signal aborts.
+   */
+  askParent(childAgentId: string, question: string, signal?: AbortSignal): Promise<string> {
+    const child = this.agents.get(childAgentId);
+    // Validation failures reject the returned promise, consistently with every
+    // cancellation path — one contract whether the child is unknown, already
+    // asking, or no longer running.
+    if (!child) return Promise.reject(new Error(`Unknown agent: "${childAgentId}"`));
+    if (this.pendingByChild.has(childAgentId)) {
+      return Promise.reject(
+        new Error(`Agent "${childAgentId}" already has a pending question for its parent`),
+      );
+    }
+    // Only a live child can ever settle the question it asks (answer or
+    // cancel) — a queued/completed/stopped/errored child registering one would
+    // strand a promise nothing resolves. "running" is the one status that can
+    // still act.
+    if (child.status !== "running") {
+      return Promise.reject(
+        new Error(`Agent "${childAgentId}" is not running (status "${child.status}")`),
+      );
+    }
+
+    return new Promise<string>((resolve, reject) => {
+      const record: PendingAgentQuestion = {
+        id: randomUUID(),
+        childAgentId,
+        parentAgentId: child.parentAgentId,
+        question,
+        createdAt: Date.now(),
+        settled: false,
+        resolve,
+        reject,
+      };
+      if (signal !== undefined) {
+        if (signal.aborted) {
+          // Never becomes live — no registration, no callback.
+          reject(signal.reason);
+          return;
+        }
+        const onAbort = () => this.settleQuestion(record, "", signal.reason);
+        signal.addEventListener("abort", onAbort, { once: true });
+        record.detachSignal = () => signal.removeEventListener("abort", onAbort);
+      }
+      // Register before invoking delivery, so a responder that reacts to the
+      // question (answer or cancel) already finds a registered question.
+      this.pendingQuestions.set(record.id, record);
+      this.pendingByChild.set(childAgentId, record.id);
+      try {
+        if (record.parentAgentId === undefined) {
+          // Top-level child: the root session answers via onQuestion.
+          this.onQuestion?.({
+            id: record.id,
+            childAgentId,
+            parentAgentId: record.parentAgentId,
+            question,
+            createdAt: record.createdAt,
+          });
+        } else {
+          // Nested child: steer the exact parent, never the root callback.
+          this.deliverToParent(record);
+        }
+      } catch (err) {
+        // A throwing callback cancels the question rather than leaking it.
+        this.settleQuestion(record, "", err);
+      }
+    });
+  }
+
+  /**
+   * Deliver a nested question to its exact parent through the steer path — a
+   * live parent session is steered now, a not-yet-created running/queued
+   * parent receives the steer via `pendingSteers` (flushed on session
+   * creation). Never reroutes: a missing or no-longer-running parent rejects
+   * the question immediately, and nothing is ever sent to the root callback or
+   * another ancestor.
+   */
+  private deliverToParent(record: PendingAgentQuestion): void {
+    const parentId = record.parentAgentId!;
+    const parent = this.agents.get(parentId);
+    if (!parent || (parent.status !== "running" && parent.status !== "queued")) {
+      this.settleQuestion(
+        record,
+        "",
+        new Error(`Parent agent "${parentId}" is no longer available to answer question "${record.id}"`),
+      );
+      return;
+    }
+    const message = formatParentSteer(record, this.agents.get(record.childAgentId));
+    if (parent.session) {
+      // Live parent session: deliver directly, but watch the steer promise.
+      // A rejection (the session was torn down mid-call) must settle the
+      // question — the public `steer` swallows rejections by design, so this
+      // path observes them itself, or the child would wait forever on a
+      // question nothing can answer. `settleQuestion` is idempotent, so a
+      // rejection racing a real answer is harmless.
+      parent.session.steer(message).catch(() => {
+        this.settleQuestion(
+          record,
+          "",
+          new Error(`Could not deliver question "${record.id}" to parent "${parentId}"`),
+        );
+      });
+      return;
+    }
+    if (!this.steer(parentId, message)) {
+      // The parent settled between the check above and the steer — reject
+      // rather than strand the question.
+      this.settleQuestion(
+        record,
+        "",
+        new Error(`Could not deliver question "${record.id}" to parent "${parentId}"`),
+      );
+    }
+  }
+
+  /**
+   * Answer a pending question. Ownership is exact: only the question's
+   * `parentAgentId` may answer — `undefined` is the root session. Missing,
+   * already-settled, and foreign questions throw. Resolves exactly once.
+   */
+  answerQuestion(questionId: string, answer: string, responderAgentId?: string): void {
+    const record = this.pendingQuestions.get(questionId);
+    if (!record) throw new Error(`No pending question: "${questionId}"`);
+    if (record.settled) throw new Error(`Question "${questionId}" is already settled`);
+    if (record.parentAgentId !== responderAgentId) {
+      const expected = record.parentAgentId === undefined ? "<root>" : record.parentAgentId;
+      throw new Error(
+        `Agent "${responderAgentId ?? "<root>"}" is not the parent of "${record.childAgentId}" (expected "${expected}")`,
+      );
+    }
+    // Clean the registry before resolving, so a re-entrant responder (one that
+    // answers further questions from within its resolution handlers) sees a
+    // consistent, already-removed state.
+    this.settleQuestion(record, answer);
+  }
+
+  /**
+   * Reject every question tied to `agentId`: ones that agent asked upward
+   * (`childAgentId`) and ones its children asked of it (`parentAgentId`).
+   * Idempotent — `settleQuestion` settles each at most once.
+   */
+  cancelQuestionsForAgent(agentId: string, reason?: unknown): void {
+    const error =
+      reason instanceof Error ? reason
+      : new Error(reason === undefined ? `Agent "${agentId}" stopped` : String(reason));
+    for (const record of [...this.pendingQuestions.values()]) {
+      if (record.childAgentId === agentId || record.parentAgentId === agentId) {
+        this.settleQuestion(record, "", error);
+      }
+    }
+  }
+
+  /**
+   * The single point that removes a question from every registry and settles
+   * its promise: settles exactly once, detaches the abort listener, deletes
+   * both index entries, then only then resolves/rejects.
+   */
+  private settleQuestion(record: PendingAgentQuestion, answer: string, err?: unknown): void {
+    if (record.settled) return;
+    record.settled = true;
+    record.detachSignal?.();
+    record.detachSignal = undefined;
+    this.pendingQuestions.delete(record.id);
+    this.pendingByChild.delete(record.childAgentId);
+    if (err === undefined) record.resolve(answer);
+    else record.reject(err);
   }
 
   /** Dispose a record's session and remove it from the map. */
   private removeRecord(id: string, record: AgentRecord): void {
     this.tombstone(record);
+    // A removed agent can no longer answer (it is gone), and a removed child's
+    // unanswered question is moot — sweep both directions, idempotently.
+    this.cancelQuestionsForAgent(id);
     const session = record.session;
     // Detached before the shutdown starts, so the record leaves the map at once and
     // nothing can observe a session that is half torn down.
@@ -1315,16 +1555,19 @@ export class AgentManager {
       if (record) {
         record.status = "stopped";
         record.completedAt = Date.now();
+        this.cancelQuestionsForAgent(queued.id);
         count++;
       }
     }
     this.dequeue(() => true);
-    // Abort running agents
+    // Abort running agents — same ordering as abort() (cancel before firing the
+    // controller) for the same reentrancy reason.
     for (const record of this.agents.values()) {
       if (record.status === "running") {
-        record.abortController?.abort();
         record.status = "stopped";
         record.completedAt = Date.now();
+        this.cancelQuestionsForAgent(record.id);
+        record.abortController?.abort();
         count++;
       }
     }
@@ -1358,6 +1601,10 @@ export class AgentManager {
     this.dequeue(() => true);
     const sessions = [...this.agents.values()].map(record => record.session);
     this.agents.clear();
+    // Every run is being torn down, so no remaining question can ever be
+    // answered — settle them all so awaiters don't hang on a dead manager.
+    const stopped = new Error("AgentManager disposed");
+    for (const q of [...this.pendingQuestions.values()]) this.settleQuestion(q, "", stopped);
     // Awaited, unlike the eviction path: pi awaits this extension's `session_shutdown`
     // handler and the process exits right after it returns, so anything left unawaited
     // here never runs at all. Bounded — each call carries its own ceiling, concurrently.

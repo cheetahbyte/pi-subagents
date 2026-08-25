@@ -308,6 +308,18 @@ export interface NotificationDetails {
   others?: NotificationDetails[];
 }
 
+/** Details attached to the root session's `subagent_question` steer message. */
+export interface AgentQuestionDetails {
+  /** Exact id the `answer_subagent_question` tool needs to settle the question. */
+  questionId: string;
+  childAgentId: string;
+  /** Typeable child name (`@handle`), when one was assigned. */
+  childHandle?: string;
+  childType?: string;
+  childDescription?: string;
+  question: string;
+}
+
 export interface EnvInfo {
   isGitRepo: boolean;
   branch: string;

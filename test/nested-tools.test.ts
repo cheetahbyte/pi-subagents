@@ -1,7 +1,13 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Type } from "@sinclair/typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  AGENT_QUESTION_TOOL_NAMES,
+  createAnswerSubagentQuestionTool,
+  createAskParentTool,
+} from "../src/agent-question-tools.js";
 import { getAvailableTypes, registerAgents, setFallbackSubagent } from "../src/agent-types.js";
 import { loadCustomAgents } from "../src/custom-agents.js";
 import { setScopeModelsEnabled } from "../src/model-scope.js";
@@ -285,6 +291,47 @@ describe("child-safe nested Agent tools", () => {
     expect(manager.resume).not.toHaveBeenCalled();
   });
 
+  it("treats an inline-resumed background child as foreground so ask_parent cannot deadlock", async () => {
+    // A child spawned with run_in_background: true keeps isBackground: true in
+    // its record. An inline resume blocks the parent, so the child's ask_parent
+    // guard must already see the record as foreground — otherwise the resumed
+    // child could ask a question its blocked parent can never answer.
+    const [agent] = tools();
+    const child = {
+      id: "child-1",
+      status: "completed",
+      result: "first run",
+      parentAgentId: "parent-1",
+      isBackground: true,
+      session: {},
+    };
+    records.set("child-1", child);
+    const askParent = vi.fn(async () => "parent answer");
+    manager.askParent = askParent;
+    manager.resume = vi.fn(async () => {
+      // While the parent awaits the resume, the child's ask_parent must be
+      // rejected by the foreground guard — not forwarded to the manager.
+      const ask = createAskParentTool(manager, "child-1");
+      const attempt = await ask.execute("call-q", { question: "May I?" }, undefined, undefined, ctx());
+      expect(attempt.isError).toBe(true);
+      expect(attempt.content[0].text).toContain("run_in_background: true");
+      expect(askParent).not.toHaveBeenCalled();
+      return { ...child, status: "completed", result: "resumed answer" };
+    });
+
+    const result = await execute(agent, {
+      resume: "child-1",
+      subagent_type: "scout",
+      description: "continue",
+      prompt: "Continue",
+    });
+
+    expect(result.isError).toBe(false);
+    expect(result.content[0].text).toContain("resumed answer");
+    // The flip happened before the resume ran — the flag is the guard's input.
+    expect(child.isBackground).toBe(false);
+  });
+
   it("waits for a queued owned child to start and settle", async () => {
     const [, getResult] = tools();
     const record = {
@@ -512,6 +559,113 @@ describe("child-safe nested Agent tools", () => {
     } as any, undefined, undefined, executionCtx);
 
     expect(spawnAndWait.mock.calls[0][1]).toBe(executionCtx);
+  });
+
+  it("ships the parent-side answer tool alongside the nested delegation tools", async () => {
+    // A parent can only answer questions its children asked, so the tool rides
+    // the nested tooling rather than every session.
+    expect(tools().map((t) => t.name)).toEqual([
+      "Agent", "get_subagent_result", "steer_subagent", "answer_subagent_question",
+    ]);
+  });
+});
+
+// ─── child→parent question tools ───────────────────────────────────────────
+// ask_parent runs on the CHILD; answer_subagent_question on its parent. Both
+// capture identity at build time from the session the tool was built for — the
+// manager never learns it from model params.
+describe("child→parent question tools", () => {
+  function questionManager(overrides: Record<string, unknown> = {}) {
+    return {
+      askParent: vi.fn(),
+      answerQuestion: vi.fn(),
+      getRecord: vi.fn(() => undefined),
+      ...overrides,
+    };
+  }
+
+  it("declares exactly the ask_parent and answer_subagent_question schemas", () => {
+    const askParent = createAskParentTool(questionManager() as any, "child-1");
+    expect(askParent.name).toBe(AGENT_QUESTION_TOOL_NAMES.ASK_PARENT);
+    expect(askParent.parameters).toEqual(Type.Object({ question: Type.String() }));
+
+    const answer = createAnswerSubagentQuestionTool(questionManager() as any, "parent-1");
+    expect(answer.name).toBe(AGENT_QUESTION_TOOL_NAMES.ANSWER_SUBAGENT_QUESTION);
+    expect(answer.parameters).toEqual(
+      Type.Object({ question_id: Type.String(), answer: Type.String() }),
+    );
+  });
+
+  it("rejects empty and whitespace-only questions before reaching the manager", async () => {
+    const mgr = questionManager();
+    const askParent = createAskParentTool(mgr as any, "child-1");
+
+    for (const question of ["", "   \t ", "\n"]) {
+      const result = await execute(askParent, { question });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("empty");
+    }
+    expect(mgr.askParent).not.toHaveBeenCalled();
+  });
+
+  it("rejects a foreground child with an actionable background hint", async () => {
+    const mgr = questionManager({
+      getRecord: vi.fn(() => ({ id: "child-1", status: "running", isBackground: false })),
+    });
+    const askParent = createAskParentTool(mgr as any, "child-1");
+
+    const result = await execute(askParent, { question: "May I?" });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("run_in_background: true");
+    expect(mgr.askParent).not.toHaveBeenCalled();
+  });
+
+  it("lets a background child ask and forwards the abort signal unchanged", async () => {
+    const mgr = questionManager({
+      getRecord: vi.fn(() => ({ id: "child-1", status: "running", isBackground: true })),
+      askParent: vi.fn(async () => "yes, go ahead"),
+    });
+    const askParent = createAskParentTool(mgr as any, "child-1");
+    const controller = new AbortController();
+
+    const result = await askParent.execute(
+      "call-1", { question: "Proceed?" }, controller.signal, undefined, ctx(),
+    );
+
+    expect(result.isError).toBe(false);
+    expect(result.content[0].text).toBe("yes, go ahead");
+    // The captured CHILD id, not anything from the params, and the SAME signal.
+    expect(mgr.askParent).toHaveBeenCalledWith("child-1", "Proceed?", controller.signal);
+  });
+
+  it("converts an askParent failure into a tool error", async () => {
+    const mgr = questionManager({
+      askParent: vi.fn(async () => { throw new Error("not running"); }),
+    });
+    const askParent = createAskParentTool(mgr as any, "child-1");
+
+    const result = await execute(askParent, { question: "Proceed?" });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("not running");
+  });
+
+  it("answers with the captured parent identity and reports a thrown failure", async () => {
+    const happy = questionManager({ answerQuestion: vi.fn() });
+    const answer = createAnswerSubagentQuestionTool(happy as any, "parent-1");
+
+    const ok = await execute(answer, { question_id: "q-1", answer: "42" });
+    expect(ok.isError).toBe(false);
+    // The captured responder id — model params carry no identity here.
+    expect(happy.answerQuestion).toHaveBeenCalledWith("q-1", "42", "parent-1");
+
+    const failing = questionManager({
+      answerQuestion: vi.fn(() => { throw new Error("No pending question: q-1"); }),
+    });
+    const bad = await execute(createAnswerSubagentQuestionTool(failing as any, "parent-1"), {
+      question_id: "q-1", answer: "42",
+    });
+    expect(bad.isError).toBe(true);
+    expect(bad.content[0].text).toContain("No pending question");
   });
 });
 

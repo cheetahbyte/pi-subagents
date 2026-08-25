@@ -81,6 +81,20 @@ function writeAgents(cwd: string): void {
   );
 }
 
+/** The same agents, plus a delegating parent and a leaf kid for the question round trip. */
+function writeQuestionAgents(cwd: string): void {
+  writeAgents(cwd);
+  const dir = join(cwd, ".pi", "agents");
+  writeFileSync(
+    join(dir, "parent.md"),
+    "---\ndescription: Questionable parent\ntools: read\nextensions: false\nallowed_subagents: kid\n---\nDelegate to kid.\n",
+  );
+  writeFileSync(
+    join(dir, "kid.md"),
+    "---\ndescription: Leaf kid\ntools: read\nextensions: false\n---\nDo the work.\n",
+  );
+}
+
 describe("nested delegation e2e (real pi-mono, faux model)", () => {
   let run: PrintModeRun | undefined;
   const tmpDirs: string[] = [];
@@ -176,6 +190,134 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
 
     // Two hops home: worker → orchestrator → parent.
     expect(run.responseText).toContain(WORKER_MARKER);
+  });
+
+  it("a background nested child asks its immediate parent, stays blocked, and continues its turn once answered", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "nested-e2e-q-"));
+    tmpDirs.push(cwd);
+    writeQuestionAgents(cwd);
+
+    const toolsSeen = new Map<string, string[]>();
+    const KID_CONTINUED = "KID-CONTINUED-WITH:";
+
+    const respond = (context: Context): FauxReply => {
+      const text = firstUserText(context).toLowerCase();
+      const names = (context.tools ?? []).map((t) => t.name);
+      const results = toolResultTexts(context);
+      const userText = [...context.messages]
+        .filter((m) => m.role === "user")
+        .flatMap((m) => (m.content as Array<{ text?: string }>).map((b) => b.text ?? ""))
+        .join("\n");
+
+      // KID — a leaf backgrounded under the parent. It asks, then its ask_parent
+      // call blocks until the parent answers; only then does this turn run again.
+      if (text.includes("ask my parent a question")) {
+        toolsSeen.set("kid", names);
+        const asked = results.find((r) => r.name === "ask_parent");
+        if (asked) {
+          // Reachable ONLY if ask_parent resolved — i.e. the parent answered and
+          // the blocked child was not torn down. The answer rides the marker.
+          return `${KID_CONTINUED} ${asked.text}`;
+        }
+        return fauxToolCall("ask_parent", { question: "Which repo is this codebase?" });
+      }
+
+      // BELL — a second leaf the parent parks on. The faux model answers
+      // instantly, so a parent that keeps turning starves its background
+      // children; parking on a blocking `wait: true` poll is what lets the kid
+      // run — and ask — while the parent stays alive and answerable.
+      if (text.includes("ring the bell")) return "BELL-DONE";
+
+      // PARENT — a nested agent that owns the kid. It spawns the kid plus a
+      // bell in the background (one per turn, so the two spawn envelopes are
+      // never racy), parks on the bell until it rings (the faux model answers
+      // instantly, so parking is what lets the background children actually
+      // run), answers the kid's question through answer_subagent_question, then
+      // polls the kid's result so the continued turn travels back up. It never
+      // returns a final text turn while the kid is outstanding — a parent that
+      // settled would be marked completed and its background child aborted, an
+      // orphan the manager deliberately does not keep alive.
+      if (text.includes("run the question round trip")) {
+        toolsSeen.set("parent", names);
+        // Envelopes arrive in spawn order: kid first, bell second.
+        const agentIds = results
+          .filter((r) => r.name === "Agent")
+          .map((r) => /Agent ID:\s*(\S+)/.exec(r.text)?.[1] ?? "");
+        const kidId = agentIds[0];
+        const bellId = agentIds[1];
+        const kidDone = results.find(
+          (r) => r.name === "get_subagent_result" && r.text.includes(KID_CONTINUED),
+        );
+        if (kidDone) return `parent saw kid continue: ${kidDone.text}`;
+        const answered = results.some(
+          (r) => r.name === "answer_subagent_question" && r.text.includes("Answer delivered"),
+        );
+        const bellDone = results.some(
+          (r) => r.name === "get_subagent_result" && r.text.includes("BELL-DONE"),
+        );
+        const steerPresent = userText.includes("answer_subagent_question");
+        if (answered && kidId) {
+          return fauxToolCall("get_subagent_result", { agent_id: kidId, wait: true });
+        }
+        if (bellDone && steerPresent && kidId) {
+          const qid = /question id "([^"]+)"/.exec(userText)?.[1];
+          expect(qid).toBeTruthy();
+          return fauxToolCall("answer_subagent_question", { question_id: qid, answer: "faux-repo" });
+        }
+        if (kidId && bellId) {
+          return fauxToolCall("get_subagent_result", { agent_id: bellId, wait: true });
+        }
+        if (agentIds.length === 1) {
+          return agentCall({
+            subagent_type: "kid",
+            description: "ring a bell",
+            prompt: "Ring the bell then stop.",
+            run_in_background: true,
+          });
+        }
+        return agentCall({
+          subagent_type: "kid",
+          description: "ask a question",
+          prompt: "Ask my parent a question and report its answer.",
+          run_in_background: true,
+        });
+      }
+
+      // ROOT — the print-mode host. Foreground-spawns the parent so the whole
+      // chain settles before it turns again.
+      toolsSeen.set("root", names);
+      const agentResult = results.find((r) => r.name === "Agent")?.text ?? "";
+      if (agentResult) return `root heard: ${agentResult}`;
+      return agentCall({
+        subagent_type: "parent",
+        description: "delegate question round trip",
+        prompt: "Run the question round trip.",
+        run_in_background: false,
+      });
+    };
+
+    run = await runPrintMode({
+      prompt: "Delegate the question round trip.",
+      cwd,
+      respond,
+      live: false,
+      maxModelCalls: 30,
+      beforeRun: () => { registerAgents(loadCustomAgents(cwd)); },
+    });
+
+    // The leaf kid can ask (ask_parent is injected into every child) but never
+    // spawns (no allowed_subagents, and it sits at the depth cap).
+    expect(toolsSeen.get("kid")).toEqual(expect.arrayContaining(["ask_parent"]));
+    expect(toolsSeen.get("kid")).not.toContain("Agent");
+    // The nested parent owns the answer side.
+    expect(toolsSeen.get("parent")).toEqual(expect.arrayContaining(["answer_subagent_question"]));
+
+    // The load-bearing fact: the child's ask_parent was answered through
+    // answer_subagent_question and its turn continued — the answer "faux-repo"
+    // survives kid → parent → root in the marker. If the question had been
+    // dropped, answered by the wrong responder, or the child torn down while
+    // blocked, no marker would exist.
+    expect(run.responseText).toContain("KID-CONTINUED-WITH: faux-repo");
   });
 
   it("backgrounds a nested child, polls it by id, and streams its transcript", async () => {

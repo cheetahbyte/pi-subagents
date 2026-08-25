@@ -17,6 +17,7 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { AGENT_QUESTION_TOOL_NAMES, createAskParentTool } from "./agent-question-tools.js";
 import { BUILTIN_TOOL_NAMES, getAgentConfig, getConfig, getMemoryToolNames, getReadOnlyMemoryToolNames, getToolNamesForType } from "./agent-types.js";
 import { runInChildSessionContext } from "./child-context.js";
 import { buildParentContext, extractText } from "./context.js";
@@ -41,8 +42,18 @@ export const SUBAGENT_TOOL_NAMES = {
   STEER: "steer_subagent",
 } as const;
 
-/** Names of tools registered by this extension that subagents must NOT inherit. */
-const EXCLUDED_TOOL_NAMES: string[] = Object.values(SUBAGENT_TOOL_NAMES);
+/**
+ * Names of tools registered by this extension that subagents must NOT inherit,
+ * including the child→parent question names. An extension that happens to
+ * register one of these names must not smuggle it into a session that never
+ * injected the real tool — the name is reserved for the custom tools below,
+ * and the per-session re-admissions are the only way it re-opens.
+ */
+const EXCLUDED_TOOL_NAMES: string[] = [
+  ...Object.values(SUBAGENT_TOOL_NAMES),
+  AGENT_QUESTION_TOOL_NAMES.ASK_PARENT,
+  AGENT_QUESTION_TOOL_NAMES.ANSWER_SUBAGENT_QUESTION,
+];
 
 /**
  * Canonical name of an extension for `extensions: [...]` allowlist matching.
@@ -233,7 +244,7 @@ export function installExtensionToolScope(
     disallowedSet: Set<string> | undefined;
     extNames: Set<string>;
     narrowing: Map<string, Set<string>>;
-    /** Opt-in nested-delegation tool names to keep active despite the EXCLUDED strip. */
+    /** Custom tool names (opt-in nested delegation + child→parent questions) to keep active despite the EXCLUDED strip. */
     nestedToolNames: Set<string>;
   },
 ): void {
@@ -827,6 +838,20 @@ export async function runAgent(
     : [];
   const nestedToolNames = new Set(nestedTools.map(tool => tool.name));
 
+  // The child→parent question tool. Injected into EVERY child session that has
+  // a manager and its own manager-assigned id — regardless of allowed_subagents
+  // (asking needs no allowlist, only a parent who can answer), of isolation
+  // (the parent is the manager, not an extension), and of the depth cap (a
+  // child at the cap still has a parent). The child's own id is captured at
+  // build time, never taken from model params. Both question names are
+  // EXCLUDED_TOOL_NAMES-reserved; `questionToolNames` is what re-admits them
+  // where actually injected.
+  const questionTools =
+    options.nestedRuntime?.manager !== undefined && options.agentId !== undefined
+      ? [createAskParentTool(options.nestedRuntime.manager, options.agentId)]
+      : [];
+  const questionToolNames = new Set(questionTools.map(tool => tool.name));
+
   // ─── Tool scoping ───────────────────────────────────────────────────────
   //
   // Some extensions register their tools ASYNCHRONOUSLY, long after the
@@ -866,12 +891,16 @@ export async function runAgent(
         (t) => !EXCLUDED_TOOL_NAMES.includes(t) && !disallowedSet?.has(t),
       ),
       ...[...nestedToolNames].filter((t) => !disallowedSet?.has(t)),
+      ...[...questionToolNames].filter((t) => !disallowedSet?.has(t)),
     ];
   } else {
-    // Deny the orchestration tools EXCEPT the nested ones this agent opted into —
-    // those are injected as customTools and must survive the registry gate.
+    // Deny the orchestration and child→parent question tools EXCEPT the ones
+    // this agent actually got injected as customTools — those must survive the
+    // registry gate. The question names are EXCLUDED_TOOL_NAMES-reserved, so an
+    // extension registering them can never hand them to a session that lacks
+    // the real injected tool; only the per-session sets below re-open them.
     const denyTools = new Set<string>(
-      EXCLUDED_TOOL_NAMES.filter((t) => !nestedToolNames.has(t)),
+      EXCLUDED_TOOL_NAMES.filter((t) => !nestedToolNames.has(t) && !questionToolNames.has(t)),
     );
     // Keep only the built-ins the agent asked for — deny the rest.
     for (const name of BUILTIN_TOOL_NAMES) {
@@ -927,7 +956,7 @@ export async function runAgent(
     ...(parentModelRuntime !== undefined && { modelRuntime: parentModelRuntime as never }),
     model,
     tools: sessionTools,
-    customTools: nestedTools,
+    customTools: [...nestedTools, ...questionTools],
     resourceLoader: loader,
   };
   if (sessionExcludeTools) {
@@ -970,7 +999,10 @@ export async function runAgent(
       disallowedSet,
       extNames,
       narrowing,
-      nestedToolNames,
+      // Question tools ride the same re-admission: inScope() derives the active
+      // set from config builtins + extension-registered tools, so a customTool
+      // that is not an EXCLUDED name would still be dropped by the renarrow.
+      nestedToolNames: new Set([...nestedToolNames, ...questionToolNames]),
     });
   }
 

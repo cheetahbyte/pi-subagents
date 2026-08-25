@@ -19,6 +19,7 @@ import { abortable } from "./abortable.js";
 import { hasAgentBadge, renderAgentName } from "./agent-color.js";
 import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, locateAgentFile, personalAgentsDir, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.js";
 import { AgentManager } from "./agent-manager.js";
+import { createAnswerSubagentQuestionTool } from "./agent-question-tools.js";
 import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
 import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getConfig, getFallbackSubagent, isDefaultsDisabled, NO_FALLBACK, registerAgents, resolveSpawnType, resolveType, setDefaultsDisabled, setFallbackSubagent } from "./agent-types.js";
 import { inChildSessionContext } from "./child-context.js";
@@ -36,7 +37,7 @@ import { SubagentScheduler } from "./schedule.js";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.js";
 import { applyAndEmitLoaded, loadSettings, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
 import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
-import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentRecord, type JoinMode, type NotificationDetails, type SubagentType, type ViewerMarkdownMode, type WidgetMode } from "./types.js";
+import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentQuestionDetails, type AgentRecord, type JoinMode, type NotificationDetails, type SubagentType, type ViewerMarkdownMode, type WidgetMode } from "./types.js";
 import { createMentionProvider, mentionRoster, type TypeInfo } from "./ui/agent-mention.js";
 import {
   type AgentActivity,
@@ -595,6 +596,40 @@ export default function (pi: ExtensionAPI) {
     // see `PendingUsagePool`. Skipped entirely when the feature is off, so no
     // pool grows in a session that will never drain it.
     if (reportUsage) pendingUsage.add(usage);
+  }, (question) => {
+    // Nested children's questions are routed through their OWNING parent's
+    // scoped tool wiring (a separate manager work package); the root session
+    // only answers questions from top-level children.
+    if (question.parentAgentId !== undefined) return;
+
+    const child = manager.getRecord(question.childAgentId);
+    const childLabel = child
+      ? (child.alias ?? child.handle ?? getDisplayName(child.type))
+      : question.childAgentId;
+    const childDesc = child?.description;
+    const content =
+      `A child agent asked you a question and is blocked waiting for your answer.\n\n` +
+      `Question ID: ${question.id}\n` +
+      `From: ${childLabel}${childDesc ? ` (${childDesc})` : ""}\n` +
+      `Question: ${question.question}\n\n` +
+      `Answer with the answer_subagent_question tool — question_id "${question.id}", ` +
+      `answer "<your answer>".`;
+
+    // Delivered as a steer so the question interrupts whatever the root model
+    // is doing and turns the session to answering it.
+    pi.sendMessage<AgentQuestionDetails>({
+      customType: "subagent_question",
+      content,
+      display: true,
+      details: {
+        questionId: question.id,
+        childAgentId: question.childAgentId,
+        childHandle: child?.alias ?? child?.handle,
+        childType: child?.type,
+        childDescription: child?.description,
+        question: question.question,
+      },
+    }, { deliverAs: "steer", triggerTurn: true });
   });
 
   // Expose manager via Symbol.for() global registry for cross-package access.
@@ -2348,6 +2383,12 @@ Terse command-style prompts produce shallow, generic work.
       }
     },
   }));
+
+  // ---- answer_subagent_question tool (root) ----
+
+  // The root's own children ask upward; `undefined` is the root identity, which
+  // the manager enforces as exact ownership of every top-level question.
+  registerToolReportingUsage(createAnswerSubagentQuestionTool(manager, undefined));
 
   // ---- /agents interactive menu ----
 

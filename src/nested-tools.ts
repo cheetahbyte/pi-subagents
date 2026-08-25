@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { abortable } from "./abortable.js";
+import { createAnswerSubagentQuestionTool } from "./agent-question-tools.js";
 import {
   buildAgentRegistry,
   getAgentConfigIn,
@@ -88,6 +89,9 @@ export interface NestedAgentManager {
   ): Promise<{ id: string; record: AgentRecord }>;
   getRecord(id: string): AgentRecord | undefined;
   resume(id: string, prompt: string, signal?: AbortSignal): Promise<AgentRecord | undefined>;
+  /** Child→parent question round trip, on the same manager (see agent-question-tools.ts). */
+  askParent(childAgentId: string, question: string, signal?: AbortSignal): Promise<string>;
+  answerQuestion(questionId: string, answer: string, responderAgentId?: string): void;
 }
 
 export interface NestedToolContext {
@@ -184,6 +188,12 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         if (!ownsRecord(existing, context.parentAgentId)) {
           return textResult(`Nested agent not found or not owned by this parent: "${params.resume}".`, true);
         }
+        // An inline resume is a foreground run: the parent is blocked awaiting
+        // it, so the child's ask_parent guard must see it as foreground. A child
+        // spawned with run_in_background: true keeps isBackground: true in its
+        // record; without the flip it could ask_parent during the resume and
+        // deadlock waiting for an answer its blocked parent can never give.
+        existing.isBackground = false;
         const resumed = await context.manager.resume(params.resume, params.prompt, signal);
         return resumed
           ? textResult(formatRecord(resumed, "inline"), resumed.status === "error")
@@ -413,5 +423,9 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
     },
   });
 
-  return [agentTool, resultTool, steerTool];
+  // The parent's side of the child→parent question round trip. Only reachable
+  // from nested tooling, where this agent can actually own children to answer.
+  const answerQuestionTool = createAnswerSubagentQuestionTool(context.manager, context.parentAgentId);
+
+  return [agentTool, resultTool, steerTool, answerQuestionTool];
 }
