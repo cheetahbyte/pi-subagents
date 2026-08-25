@@ -2,13 +2,9 @@
 
 A [pi](https://pi.dev) extension that brings **Claude Code-style autonomous sub-agents** to pi. Spawn specialized agents that run in isolated sessions — each with its own tools, system prompt, model, and thinking level. Run them in the background (the default) or block on them, steer them mid-run, resume completed sessions, and define your own custom agent types.
 
-<img width="600" alt="pi-subagents screenshot" src="https://github.com/tintinweb/pi-subagents/raw/master/media/screenshot.png" />
+## Fork
 
-
-https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
-
-<img width="600" alt="pi-color-badges-white" src="https://github.com/user-attachments/assets/555dcae4-333e-4ff0-b420-7b3369c018a4" />
-
+This repository is a fork of [tintinweb/pi-subagents](https://github.com/tintinweb/pi-subagents), originally created and maintained by [tintinweb](https://github.com/tintinweb). This fork groups agents in FleetView by state: **Queued**, **Running**, **Finished**, and **Failed**.
 
 ## Features
 
