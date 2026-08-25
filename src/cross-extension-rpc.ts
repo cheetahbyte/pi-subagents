@@ -10,6 +10,7 @@
  */
 
 import { type ModelRegistry, resolveModel } from "./model-resolver.js";
+import { checkModelScope } from "./model-scope.js";
 
 /** Minimal event bus interface needed by the RPC handlers. */
 export interface EventBus {
@@ -98,21 +99,46 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
       // agent's auth lookup doesn't crash with "No API key found for
       // undefined".
       let normalizedOptions = options ?? {};
-      if (typeof normalizedOptions.model === "string") {
-        const registry = (ctx as { modelRegistry?: ModelRegistry }).modelRegistry;
-        if (!registry) {
-          throw new Error(
-            `Model override "${normalizedOptions.model}" provided but ctx.modelRegistry is unavailable`,
-          );
+      // `!= null` on purpose: a JSON-forwarding caller can serialize an unset
+      // field as null, and the runner reads `options.model ?? default`, so null
+      // means "inherit" — not an override to resolve or scope-check.
+      const override = normalizedOptions.model;
+      if (override != null) {
+        const { modelRegistry, cwd } = ctx as { modelRegistry?: ModelRegistry; cwd?: string };
+        // Names the override the same way in both messages below; an object
+        // override would otherwise interpolate as "[object Object]".
+        const label = typeof override === "string" ? override : `${override.provider}/${override.id}`;
+        if (!modelRegistry) {
+          throw new Error(`Model override "${label}" provided but ctx.modelRegistry is unavailable`);
         }
-        const resolved = resolveModel(normalizedOptions.model, registry);
-        if (typeof resolved === "string") {
-          // resolveModel returns a human-readable error string when the
-          // input doesn't match any available model. Surface it instead of
-          // silently falling back so the caller sees the auth/typo issue.
-          throw new Error(resolved);
+        let model = override;
+        if (typeof override === "string") {
+          const resolved = resolveModel(override, modelRegistry);
+          if (typeof resolved === "string") {
+            // resolveModel returns a human-readable error string when the
+            // input doesn't match any available model. Surface it instead of
+            // silently falling back so the caller sees the auth/typo issue.
+            throw new Error(resolved);
+          }
+          model = resolved;
+          normalizedOptions = { ...normalizedOptions, model: resolved };
         }
-        normalizedOptions = { ...normalizedOptions, model: resolved };
+
+        // A model on the RPC payload is an orchestrator-level choice, exactly
+        // like Agent({ model }) — so it gets the Agent tool's hard error, never
+        // the frontmatter warn (#240). The check reads the RESOLVED model:
+        // resolveModel is fuzzy, so a bare "sonnet" can land on a provider the
+        // caller never named. Frontmatter-pinned and parent-inherited models are
+        // resolved later, in agent-runner, and keep warn-and-proceed.
+        const verdict = checkModelScope({
+          model,
+          cwd: cwd ?? process.cwd(),
+          modelRegistry,
+          callerSupplied: true,
+          agentLabel: type,
+          modelInput: label,
+        });
+        if (verdict.kind === "error") throw new Error(verdict.message);
       }
 
       return { id: manager.spawn(pi, ctx, type, prompt, normalizedOptions) };

@@ -6,10 +6,32 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { NO_FALLBACK } from "./agent-types.js";
-import type { AgentMentionMode, JoinMode, WidgetMode } from "./types.js";
+import type { AgentMentionMode, JoinMode, ViewerMarkdownMode, WidgetMode } from "./types.js";
 
 export interface SubagentsSettings {
   maxConcurrent?: number;
+  /**
+   * Max concurrent FOREGROUND (blocking) agents — `0` = unlimited, the default,
+   * which preserves the behaviour that has always applied: nothing bounded
+   * foreground work, and pi dispatches a message's tool calls through
+   * `Promise.all`, so an unqualified fan-out of blocking `Agent` calls runs all
+   * at once. Set it to bound that (#253 — on local models, parallel agents
+   * thrash the prompt cache).
+   *
+   * Deliberately independent of `maxConcurrent` rather than folded into it: a
+   * foreground agent blocks the parent anyway, so charging it to the background
+   * pool would let a saturated pool starve the main session of work it could
+   * have done itself.
+   *
+   * Bounds only spawns a caller is blocking on inline. Nested children are
+   * exempt — their parent is blocked awaiting them, so queueing a child behind
+   * its own parent would deadlock — and so are detached spawns from
+   * cross-extension RPC or `@handle` mentions, which block nobody and are
+   * documented to start immediately. Foreground `resume` is also outside the
+   * pool: it reuses an existing session and never reaches the spawn path, so
+   * several blocking resumes in one message can still exceed the limit.
+   */
+  maxConcurrentForeground?: number;
   /**
    * 0 = unlimited — the extension's single source of truth for that convention:
    * `normalizeMaxTurns()` in agent-runner.ts treats 0 → `undefined`, and the
@@ -246,6 +268,19 @@ export interface SubagentsSettings {
    * narrow terminal.
    */
   showModel?: boolean;
+  /**
+   * How much of the conversation viewer's transcript renders as Markdown.
+   * Defaults to `assistant`. Applied live — the viewer's `m` key cycles this
+   * same setting, so a choice made in the overlay persists like one made in
+   * `/agents → Settings`.
+   *
+   * Scoped rather than all-or-nothing because the two kinds of content have
+   * different contracts: assistant text is authored as Markdown, while a tool
+   * result is whatever bytes the tool produced. Rendering the latter as
+   * Markdown is lossy in ways that look like the tool misbehaved — see
+   * `ViewerMarkdownMode` for the specific rewrites — so `all` is opt-in.
+   */
+  viewerMarkdown?: ViewerMarkdownMode;
 }
 
 export type ToolDescriptionMode = "full" | "compact" | "custom";
@@ -253,6 +288,7 @@ export type ToolDescriptionMode = "full" | "compact" | "custom";
 /** Setter hooks used by applySettings to wire persisted values into in-memory state. */
 export interface SettingsAppliers {
   setMaxConcurrent: (n: number) => void;
+  setMaxConcurrentForeground: (n: number) => void;
   setDefaultMaxTurns: (n: number) => void;
   setGraceTurns: (n: number) => void;
   setDefaultJoinMode: (mode: JoinMode) => void;
@@ -273,6 +309,7 @@ export interface SettingsAppliers {
   setReportUsage: (b: boolean) => void;
   setShowCost: (b: boolean) => void;
   setShowModel: (b: boolean) => void;
+  setViewerMarkdown: (mode: ViewerMarkdownMode) => void;
 }
 
 /** Emit callback — a subset of `pi.events.emit` to keep helpers testable. */
@@ -281,6 +318,7 @@ export type SettingsEmit = (event: string, payload: unknown) => void;
 const VALID_JOIN_MODES: ReadonlySet<string> = new Set<JoinMode>(["async", "group", "smart"]);
 const VALID_TOOL_DESCRIPTION_MODES: ReadonlySet<string> = new Set<ToolDescriptionMode>(["full", "compact", "custom"]);
 const VALID_WIDGET_MODES: ReadonlySet<string> = new Set<WidgetMode>(["all", "background", "off"]);
+const VALID_VIEWER_MARKDOWN_MODES: ReadonlySet<string> = new Set<ViewerMarkdownMode>(["off", "assistant", "all"]);
 const VALID_AGENT_MENTION_MODES: ReadonlySet<string> = new Set<AgentMentionMode>(["model", "direct", "off"]);
 
 // Sanity ceilings — prevent hand-edited configs from asking for values that
@@ -302,6 +340,15 @@ function sanitize(raw: unknown): SubagentsSettings {
     (r.maxConcurrent as number) <= MAX_CONCURRENT_CEILING
   ) {
     out.maxConcurrent = r.maxConcurrent as number;
+  }
+  // Floor 0, not 1 like maxConcurrent above: 0 is the documented "unlimited"
+  // value and the default, so dropping it would silently be unrepresentable.
+  if (
+    Number.isInteger(r.maxConcurrentForeground) &&
+    (r.maxConcurrentForeground as number) >= 0 &&
+    (r.maxConcurrentForeground as number) <= MAX_CONCURRENT_CEILING
+  ) {
+    out.maxConcurrentForeground = r.maxConcurrentForeground as number;
   }
   if (
     Number.isInteger(r.defaultMaxTurns) &&
@@ -376,6 +423,9 @@ function sanitize(raw: unknown): SubagentsSettings {
   if (typeof r.showModel === "boolean") {
     out.showModel = r.showModel;
   }
+  if (typeof r.viewerMarkdown === "string" && VALID_VIEWER_MARKDOWN_MODES.has(r.viewerMarkdown)) {
+    out.viewerMarkdown = r.viewerMarkdown as ViewerMarkdownMode;
+  }
   if (r.fallbackSubagent === false) {
     // The only non-string spelling worth accepting: a boolean would otherwise be
     // dropped, silently leaving the PERMISSIVE default in place. Every string is
@@ -437,6 +487,9 @@ export function saveSettings(s: SubagentsSettings, cwd: string = process.cwd()):
 /** Apply persisted settings to the in-memory state via caller-supplied setters. */
 export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers): void {
   if (typeof s.maxConcurrent === "number") appliers.setMaxConcurrent(s.maxConcurrent);
+  if (typeof s.maxConcurrentForeground === "number") {
+    appliers.setMaxConcurrentForeground(s.maxConcurrentForeground);
+  }
   if (typeof s.defaultMaxTurns === "number") appliers.setDefaultMaxTurns(s.defaultMaxTurns);
   if (typeof s.graceTurns === "number") appliers.setGraceTurns(s.graceTurns);
   if (typeof s.maxSubagentDepth === "number") appliers.setMaxSubagentDepth(s.maxSubagentDepth);
@@ -457,6 +510,7 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
   if (typeof s.reportUsage === "boolean") appliers.setReportUsage(s.reportUsage);
   if (typeof s.showCost === "boolean") appliers.setShowCost(s.showCost);
   if (typeof s.showModel === "boolean") appliers.setShowModel(s.showModel);
+  if (s.viewerMarkdown) appliers.setViewerMarkdown(s.viewerMarkdown);
 }
 
 /**

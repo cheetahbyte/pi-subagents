@@ -1,5 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type EventBus, PROTOCOL_VERSION, type RpcDeps, registerRpcHandlers, type SpawnCapable } from "../src/cross-extension-rpc.js";
+import { isScopeModelsEnabled, setScopeModelsEnabled } from "../src/model-scope.js";
 
 /** Simple in-process event bus for testing. */
 function createEventBus(): EventBus {
@@ -343,6 +347,25 @@ describe("cross-extension RPC", () => {
       expect(manager.spawn).not.toHaveBeenCalled();
     });
 
+    it("treats an explicit null model as no override at all", async () => {
+      // A JSON-forwarding caller can serialize an unset field as null. The
+      // runner reads `options.model ?? default`, so null means "inherit" —
+      // it must not be resolved, scope-checked, or dereferenced.
+      registerRpcHandlers(deps);
+      const reply = vi.fn();
+      events.on("subagents:rpc:spawn:reply:req-m5", reply);
+      events.emit("subagents:rpc:spawn", {
+        requestId: "req-m5", type: "general-purpose", prompt: "x",
+        options: { model: null },
+      });
+
+      await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+      expect(reply).toHaveBeenCalledWith({ success: true, data: { id: "agent-42" } });
+      expect(manager.spawn).toHaveBeenCalledWith(
+        deps.pi, ctx, "general-purpose", "x", { model: null },
+      );
+    });
+
     it("errors when ctx has no modelRegistry but a string model is given", async () => {
       ctx = { session: true }; // no modelRegistry
       registerRpcHandlers(deps);
@@ -358,6 +381,100 @@ describe("cross-extension RPC", () => {
       expect(call.success).toBe(false);
       expect(call.error).toMatch(/modelRegistry is unavailable/);
       expect(manager.spawn).not.toHaveBeenCalled();
+    });
+  });
+  // --- scopeModels on the RPC spawn path (#240): an override on the RPC
+  //     payload is an orchestrator-level choice, so it gets the Agent tool's
+  //     hard error rather than reaching the spawn on an out-of-scope model. ---
+
+  describe("spawn RPC model scope", () => {
+    const ALLOWED = { id: "gpt-5.5", provider: "openai-codex", name: "GPT 5.5" };
+    const BLOCKED = { id: "claude-sonnet-4", provider: "anthropic", name: "Claude Sonnet 4" };
+    const MODELS = [ALLOWED, BLOCKED];
+    const registry = {
+      find: (provider: string, id: string) =>
+        MODELS.find(m => m.provider === provider && m.id === id) ?? null,
+      getAll: () => MODELS,
+      getAvailable: () => MODELS,
+    };
+
+    let projectDir: string;
+    let agentDir: string;
+    let prevAgentDir: string | undefined;
+    let prevEnabled: boolean;
+
+    beforeEach(() => {
+      // resolveEnabledModels memoizes on (patterns, mtime+size of both settings
+      // files) — a fresh project dir per test keeps one case's allowlist from
+      // being served to the next. Same harness as test/model-scope.test.ts.
+      projectDir = mkdtempSync(join(tmpdir(), "pi-rpc-scope-project-"));
+      agentDir = mkdtempSync(join(tmpdir(), "pi-rpc-scope-global-"));
+      prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      prevEnabled = isScopeModelsEnabled();
+      mkdirSync(join(projectDir, ".pi"), { recursive: true });
+      writeFileSync(
+        join(projectDir, ".pi", "settings.json"),
+        JSON.stringify({ enabledModels: ["openai-codex/gpt-5.5"] }),
+      );
+      setScopeModelsEnabled(true);
+      ctx = { session: true, cwd: projectDir, modelRegistry: registry };
+      deps = { events, pi: { events }, getCtx: () => ctx, manager };
+    });
+
+    afterEach(() => {
+      setScopeModelsEnabled(prevEnabled); // module-global — restore for other suites
+      if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(agentDir, { recursive: true, force: true });
+    });
+
+    async function spawn(requestId: string, model: unknown) {
+      registerRpcHandlers(deps);
+      const reply = vi.fn();
+      events.on(`subagents:rpc:spawn:reply:${requestId}`, reply);
+      events.emit("subagents:rpc:spawn", {
+        requestId, type: "general-purpose", prompt: "x", options: { model },
+      });
+      await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+      return (reply as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    }
+
+    it("refuses an out-of-scope string override, listing what is allowed", async () => {
+      // The reported case: a bare "sonnet" fuzzy-resolves across providers, so
+      // only the RESOLVED model can be compared against enabledModels.
+      const call = await spawn("req-sc1", "sonnet");
+      expect(call.success).toBe(false);
+      expect(call.error).toMatch(/Model not in scope/);
+      expect(call.error).toContain('"sonnet"');
+      expect(call.error).toContain("  openai-codex/gpt-5.5");
+      expect(manager.spawn).not.toHaveBeenCalled();
+    });
+
+    it("refuses an out-of-scope Model object override too", async () => {
+      const call = await spawn("req-sc2", BLOCKED);
+      expect(call.success).toBe(false);
+      expect(call.error).toMatch(/Model not in scope/);
+      expect(call.error).toContain('"anthropic/claude-sonnet-4"');
+      expect(manager.spawn).not.toHaveBeenCalled();
+    });
+
+    it("spawns normally when the override is in scope", async () => {
+      const call = await spawn("req-sc3", "openai-codex/gpt-5.5");
+      expect(call).toEqual({ success: true, data: { id: "agent-42" } });
+      expect(manager.spawn).toHaveBeenCalledWith(
+        deps.pi, ctx, "general-purpose", "x", { model: ALLOWED },
+      );
+    });
+
+    it("does not check scope while the setting is off", async () => {
+      setScopeModelsEnabled(false);
+      const call = await spawn("req-sc4", "sonnet");
+      expect(call).toEqual({ success: true, data: { id: "agent-42" } });
+      expect(manager.spawn).toHaveBeenCalledWith(
+        deps.pi, ctx, "general-purpose", "x", { model: BLOCKED },
+      );
     });
   });
 });

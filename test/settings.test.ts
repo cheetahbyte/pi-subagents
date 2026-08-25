@@ -153,6 +153,15 @@ describe("settings persistence", () => {
     expect(loadSettings(projectDir)).toEqual({}); // invalid value dropped
   });
 
+  it("round-trips viewerMarkdown; keeps valid values, drops invalid", () => {
+    saveSettings({ viewerMarkdown: "off" }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ viewerMarkdown: "off" });
+    saveSettings({ viewerMarkdown: "all" }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ viewerMarkdown: "all" });
+    writeProject({ viewerMarkdown: "markdown" } as any);
+    expect(loadSettings(projectDir)).toEqual({}); // invalid value dropped
+  });
+
   it("round-trips outputTranscript; drops non-boolean", () => {
     saveSettings({ outputTranscript: false }, projectDir);
     expect(loadSettings(projectDir)).toEqual({ outputTranscript: false });
@@ -272,6 +281,20 @@ describe("settings persistence", () => {
       expect(loadSettings(projectDir).maxConcurrent).toBeUndefined();
       writeProject({ maxConcurrent: null });
       expect(loadSettings(projectDir).maxConcurrent).toBeUndefined();
+    });
+
+    // Unlike maxConcurrent above, 0 is the DEFAULT here and means unlimited —
+    // dropping it would make the default unrepresentable in the file.
+    it("keeps maxConcurrentForeground: 0 (explicit unlimited)", () => {
+      writeProject({ maxConcurrentForeground: 0 });
+      expect(loadSettings(projectDir)).toEqual({ maxConcurrentForeground: 0 });
+    });
+
+    it("drops out-of-range or non-integer maxConcurrentForeground", () => {
+      for (const bad of [-1, 1025, 1.5, "four", null]) {
+        writeProject({ maxConcurrentForeground: bad });
+        expect(loadSettings(projectDir).maxConcurrentForeground).toBeUndefined();
+      }
     });
 
     it("accepts defaultMaxTurns: 0 (explicit unlimited)", () => {
@@ -500,6 +523,7 @@ describe("settings persistence", () => {
     beforeEach(() => {
       appliers = {
         setMaxConcurrent: vi.fn(),
+        setMaxConcurrentForeground: vi.fn(),
         setDefaultMaxTurns: vi.fn(),
         setGraceTurns: vi.fn(),
         setDefaultJoinMode: vi.fn(),
@@ -513,6 +537,7 @@ describe("settings persistence", () => {
         setAgentMentions: vi.fn(),
       setRememberAgents: vi.fn(),
         setWidgetMode: vi.fn(),
+        setViewerMarkdown: vi.fn(),
         setOutputTranscript: vi.fn(),
         setWorktreeIsolation: vi.fn(),
         setMaxSubagentDepth: vi.fn(),
@@ -521,6 +546,19 @@ describe("settings persistence", () => {
         setShowCost: vi.fn(),
         setShowModel: vi.fn(),
       };
+    });
+
+    // 0 is a real value here, so `if (s.x)` truthiness would silently skip it.
+    it("applies maxConcurrentForeground, including an explicit 0", () => {
+      applySettings({ maxConcurrentForeground: 3 }, appliers);
+      expect(appliers.setMaxConcurrentForeground).toHaveBeenCalledWith(3);
+
+      applySettings({ maxConcurrentForeground: 0 }, appliers);
+      expect(appliers.setMaxConcurrentForeground).toHaveBeenCalledWith(0);
+
+      vi.mocked(appliers.setMaxConcurrentForeground).mockClear();
+      applySettings({}, appliers);
+      expect(appliers.setMaxConcurrentForeground).not.toHaveBeenCalled();
     });
 
     it("applies reportUsage and showCost", () => {
@@ -614,6 +652,13 @@ describe("settings persistence", () => {
       expect(appliers.setWidgetMode).toHaveBeenCalledWith("off");
       applySettings({}, appliers);
       expect(appliers.setWidgetMode).toHaveBeenCalledTimes(1); // absence is "use default"
+    });
+
+    it("applies viewerMarkdown; skips it when absent", () => {
+      applySettings({ viewerMarkdown: "all" }, appliers);
+      expect(appliers.setViewerMarkdown).toHaveBeenCalledWith("all");
+      applySettings({}, appliers);
+      expect(appliers.setViewerMarkdown).toHaveBeenCalledTimes(1); // absence is "use default"
     });
 
     it("applies fleetView (true and false); skips it when absent", () => {
@@ -729,6 +774,7 @@ describe("settings persistence", () => {
     beforeEach(() => {
       appliers = {
         setMaxConcurrent: vi.fn(),
+        setMaxConcurrentForeground: vi.fn(),
         setDefaultMaxTurns: vi.fn(),
         setGraceTurns: vi.fn(),
         setDefaultJoinMode: vi.fn(),
@@ -742,6 +788,7 @@ describe("settings persistence", () => {
         setAgentMentions: vi.fn(),
       setRememberAgents: vi.fn(),
         setWidgetMode: vi.fn(),
+        setViewerMarkdown: vi.fn(),
         setOutputTranscript: vi.fn(),
         setWorktreeIsolation: vi.fn(),
         setMaxSubagentDepth: vi.fn(),

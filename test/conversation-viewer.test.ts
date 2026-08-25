@@ -8,11 +8,29 @@ import type { AgentRecord } from "../src/types.js";
 // its import.
 
 let wrapOverride: ((text: string, width: number) => string[]) | null = null;
+/** Bumped per `new Markdown(...)`, so a test can assert the per-message cache holds. */
+let markdownConstructions = 0;
+/** Forces the Markdown component to throw, for the viewer's fallback path. */
+let markdownThrows = false;
 
 vi.mock("@earendil-works/pi-tui", async (importOriginal) => {
   const original = await importOriginal<typeof import("@earendil-works/pi-tui")>();
   return {
     ...original,
+    Markdown: class extends original.Markdown {
+      constructor(...args: ConstructorParameters<typeof original.Markdown>) {
+        markdownConstructions++;
+        super(...args);
+      }
+      render(width: number): string[] {
+        // Real trigger is ~54 nested blockquotes overflowing pi-tui's recursive
+        // renderer. Forced rather than reproduced: a real overflow costs ~2.4s
+        // and its depth depends on the platform's stack limit, so reproducing it
+        // makes the test both slow and liable to stop triggering silently.
+        if (markdownThrows) throw new RangeError("Maximum call stack size exceeded");
+        return super.render(width);
+      }
+    },
     wrapTextWithAnsi: (...args: [string, number]) => {
       if (wrapOverride) return wrapOverride(...args);
       return original.wrapTextWithAnsi(...args);
@@ -23,7 +41,7 @@ vi.mock("@earendil-works/pi-tui", async (importOriginal) => {
 // Must import AFTER vi.mock declaration (vitest hoists vi.mock but the
 // dynamic import of the test subject must happen after)
 const { visibleWidth } = await import("@earendil-works/pi-tui");
-const { ConversationViewer } = await import("../src/ui/conversation-viewer.js");
+const { ConversationViewer, RESULT_MAX_CHARS } = await import("../src/ui/conversation-viewer.js");
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -73,6 +91,8 @@ function assertAllLinesFit(lines: string[], width: number) {
 
 beforeEach(() => {
   wrapOverride = null;
+  markdownConstructions = 0;
+  markdownThrows = false;
 });
 
 describe("ConversationViewer invocation line", () => {
@@ -343,6 +363,267 @@ describe("ConversationViewer", () => {
           mockTui(30, w), mockSession(messages), mockRecord(), undefined, ansiTheme(), vi.fn(),
         );
         assertAllLinesFit(viewer.render(w), w);
+      }
+    });
+  });
+
+  describe("Markdown rendering", () => {
+    /** ANSI stripped, so an assertion is about the text and not the styling. */
+    const strip = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, "");
+
+    function viewerFor(
+      messages: any[],
+      mode?: "off" | "assistant" | "all",
+      onMode?: (m: any) => void,
+      /** Tall enough that the assertion reads the whole transcript, not the scrolled window. */
+      rows = 200,
+    ) {
+      return new ConversationViewer(
+        mockTui(rows, 80), mockSession(messages), mockRecord({ status: "completed" }), undefined,
+        ansiTheme(), vi.fn(), undefined, undefined, undefined, false,
+        mode ? () => mode : undefined, onMode,
+      );
+    }
+
+    const assistant = (text: string) => [{ role: "assistant", content: [{ type: "text", text }] }];
+    const result = (text: string) => [{ role: "toolResult", toolUseId: "t1", content: [{ type: "text", text }] }];
+
+    it("renders assistant Markdown by default instead of raw source markers", () => {
+      const out = strip(viewerFor(assistant("# Heading\n\n- first\n- second\n\n**bold**")).render(80).join("\n"));
+
+      expect(out).toContain("Heading");
+      expect(out).not.toContain("# Heading");
+      expect(out).not.toContain("**bold**");
+      expect(out).toContain("bold");
+    });
+
+    it("leaves assistant text verbatim under `off`", () => {
+      const out = strip(viewerFor(assistant("# Heading\n\n**bold**"), "off").render(80).join("\n"));
+
+      expect(out).toContain("# Heading");
+      expect(out).toContain("**bold**");
+    });
+
+    // The reason `all` is not the default: a tool result is arbitrary bytes, and
+    // a Markdown pass rewrites several constructs that occur constantly in real
+    // command output. Each line here is a rewrite reproduced against pi-tui.
+    it("leaves tool results byte-exact under the default mode", () => {
+      const raw = [
+        "#!/bin/sh",
+        "# section",
+        "3) alpha",
+        "7) beta",
+        "9) gamma",
+        "Section",
+        "---",
+        "next",
+      ].join("\n");
+      const out = strip(viewerFor(result(raw)).render(80).join("\n"));
+
+      for (const line of raw.split("\n")) expect(out).toContain(line);
+    });
+
+    it("renders tool-result Markdown under `all`", () => {
+      const out = strip(viewerFor(result("## ctx_execute\n\n- one\n- two"), "all").render(80).join("\n"));
+
+      expect(out).toContain("ctx_execute");
+      expect(out).not.toContain("## ctx_execute");
+    });
+
+    it("does not renumber ordered lists even when it does render them", () => {
+      const out = strip(viewerFor(result("3) alpha\n7) beta\n9) gamma"), "all").render(80).join("\n"));
+
+      expect(out).toContain("3) alpha");
+      expect(out).not.toContain("4. beta");
+    });
+
+    it("`m` cycles the mode, persists it, and shows it in the footer", () => {
+      const onMode = vi.fn();
+      const viewer = viewerFor(assistant("# Heading"), "assistant", onMode);
+
+      expect(strip(viewer.render(80).join("\n"))).toContain("m md");
+
+      viewer.handleInput("m");
+      expect(onMode).toHaveBeenLastCalledWith("all");
+      expect(strip(viewer.render(80).join("\n"))).toContain("m md+");
+
+      viewer.handleInput("m");
+      expect(onMode).toHaveBeenLastCalledWith("off");
+      const off = strip(viewer.render(80).join("\n"));
+      expect(off).toContain("m raw");
+      // The override, not just the label, is what took effect.
+      expect(off).toContain("# Heading");
+
+      viewer.handleInput("m");
+      expect(onMode).toHaveBeenLastCalledWith("assistant");
+    });
+
+    it("`m` still cycles when no persist hook is wired", () => {
+      const viewer = viewerFor(assistant("# Heading"), "assistant");
+      viewer.handleInput("m");
+      viewer.handleInput("m");
+
+      expect(strip(viewer.render(80).join("\n"))).toContain("# Heading");
+    });
+
+    it("`m` disarms a pending stop rather than confirming it", () => {
+      const onStop = vi.fn();
+      const viewer = new ConversationViewer(
+        mockTui(200, 80), mockSession(assistant("hi")), mockRecord({ status: "running" }), undefined,
+        ansiTheme(), vi.fn(), onStop,
+      );
+
+      viewer.handleInput("x");
+      viewer.handleInput("m");
+      viewer.handleInput("x");
+
+      expect(onStop).not.toHaveBeenCalled();
+    });
+
+    it("keeps the footer's navigation hints intact at 80 columns", () => {
+      const viewer = new ConversationViewer(
+        mockTui(200, 80), mockSession(assistant("hi")), mockRecord({ status: "running" }), undefined,
+        ansiTheme(), vi.fn(), vi.fn(), undefined, vi.fn(),
+      );
+      const lines = viewer.render(80);
+      const footer = strip(lines[lines.length - 2]);
+
+      expect(footer).toContain("Enter steer");
+      expect(footer).toContain("x stop");
+      expect(footer).toContain("m md");
+      expect(footer).toContain("Esc close");
+    });
+
+    it("caps a tool result at RESULT_MAX_CHARS, not 500, and says what it dropped", () => {
+      const lines = Array.from({ length: 3000 }, (_, i) => `line ${i}`);
+      const out = strip(viewerFor(result(lines.join("\n")), undefined, undefined, 4000).render(80).join("\n"));
+
+      expect(out).toContain("line 100");                       // far past the old 500-char cut
+      expect(out).not.toContain("line 2999");                  // but still bounded
+      expect(out).toMatch(/\.\.\. \(truncated, \d+ more lines\)/);
+    });
+
+    it("puts the truncation notice outside the code fence it cut into", () => {
+      const text = `\`\`\`js\n${"const a = 1;\n".repeat(2000)}\`\`\``;
+      const viewer = viewerFor(result(text), "all", undefined, 4000);
+      const content = ((viewer as any).buildContentLines(76) as string[]).map(strip);
+      const note = content.find(l => l.includes("... (truncated"));
+
+      // Appended into the content it lands inside the unterminated fence, where
+      // it picks up the code-block indent and reads as a line of the tool's source.
+      expect(note).toMatch(/^\.\.\. \(truncated, \d+ more lines\)$/);
+    });
+
+    it("falls back to literal wrapping when the Markdown parser throws", () => {
+      // render() is on the TUI's critical path, so a parser throw must degrade
+      // rather than take the overlay down with it.
+      const viewer = viewerFor(result("# heading"), "all");
+      markdownThrows = true;
+
+      expect(() => viewer.render(80)).not.toThrow();
+      expect(strip(viewer.render(80).join("\n"))).toContain("# heading");
+
+      // And the failure is remembered — otherwise the throw repeats on every
+      // render and every scroll key. Still literal once the parser would work.
+      markdownThrows = false;
+      expect(strip(viewer.render(80).join("\n"))).toContain("# heading");
+    });
+
+    it("tracks a tool result that keeps growing past the cap", () => {
+      // The live case: the capped prefix never changes, so the parse is reused,
+      // but the count of what is being held back has to keep moving.
+      const msg = { role: "toolResult", toolUseId: "t", content: [{ type: "text", text: `${"row\n".repeat(4500)}` }] };
+      const viewer = viewerFor([msg]);
+      const elided = () => Number(
+        strip(((viewer as any).buildContentLines(76) as string[]).join("\n"))
+          .match(/truncated, (\d+) more/)?.[1],
+      );
+
+      const before = elided();
+      msg.content[0].text += "row\n".repeat(1000);
+      const after = elided();
+
+      expect(before).toBeGreaterThan(0);
+      expect(after).toBeGreaterThan(before);
+      expect(markdownConstructions).toBe(0); // default mode: results take the literal path
+    });
+
+    it("leaves a result under the cap untouched", () => {
+      // Deliberately between the old 500-char cap and the new one, so the test
+      // discriminates the cap's value and not merely its existence.
+      const text = `head\n${"filler line\n".repeat(200)}tail`;
+      const out = strip(viewerFor(result(text), undefined, undefined, 600).render(80).join("\n"));
+
+      expect(text.length).toBeLessThan(RESULT_MAX_CHARS);
+      expect(out).toContain("head");
+      expect(out).toContain("tail");
+      expect(out).not.toContain("truncated");
+    });
+
+    it("caps bash output with the same rule as a tool result", () => {
+      const messages = [{ role: "bashExecution", command: "yes", output: "y\n".repeat(20000) }];
+      const out = strip(viewerFor(messages).render(80).join("\n"));
+
+      expect(out).toMatch(/\.\.\. \(truncated, \d+ more lines\)/);
+    });
+
+    it("keeps tool results dim even when rendering them as Markdown", () => {
+      // Reads the content line directly: every bordered row carries the theme's
+      // escape on its `│`, so asserting on rendered output would pass either way.
+      const viewer = viewerFor(result("plain result text"), "all");
+      const line = (viewer as any).buildContentLines(76)
+        .find((l: string) => strip(l).includes("plain result text"));
+
+      expect(line).toContain("\x1b[38;5;240m");
+    });
+
+    it("keeps tool results dim on the literal path too", () => {
+      const viewer = viewerFor(result("plain result text"));
+      const line = (viewer as any).buildContentLines(76)
+        .find((l: string) => strip(l).includes("plain result text"));
+
+      expect(line).toContain("\x1b[38;5;240m");
+    });
+
+    it("reuses one Markdown per message across renders", () => {
+      const viewer = viewerFor(assistant("# Heading"));
+      viewer.render(80);
+      const afterFirst = markdownConstructions;
+      viewer.render(80);
+      viewer.render(80);
+
+      expect(afterFirst).toBe(1);
+      expect(markdownConstructions).toBe(afterFirst);
+    });
+
+    it("re-renders a message whose text is still streaming", () => {
+      const messages = assistant("# One");
+      const viewer = viewerFor(messages);
+      expect(strip(viewer.render(80).join("\n"))).toContain("One");
+
+      messages[0].content[0].text = "# Two";
+      const out = strip(viewer.render(80).join("\n"));
+
+      expect(out).toContain("Two");
+      expect(out).not.toContain("One");
+      expect(markdownConstructions).toBe(1);
+    });
+
+    it("renders Markdown to fit, so the overwidth clamp never has to cut it", () => {
+      const text = `# ${"Heading ".repeat(20)}\n\n| a | b |\n|---|---|\n| ${"x".repeat(90)} | 2 |\n\n\`\`\`js\nconst x = ${"1".repeat(120)};\n\`\`\``;
+      // From 20 up: below that the `[Assistant]` role label is itself wider than
+      // the viewport, so the clamp legitimately fires on chrome rather than content.
+      // Narrower widths stay covered by the wrapTextWithAnsi safety net above.
+      for (const w of [20, 40, 80, 120]) {
+        const viewer = new ConversationViewer(
+          mockTui(30, w), mockSession(assistant(text)), mockRecord(), undefined, ansiTheme(), vi.fn(),
+        );
+        const content = (viewer as any).buildContentLines(w) as string[];
+
+        assertAllLinesFit(content, w);
+        // `truncateToWidth` is the #7 backstop, not what keeps these in bounds —
+        // if it fires on Markdown output, content is being silently cut.
+        expect(content.filter(l => strip(l).endsWith("..."))).toEqual([]);
       }
     });
   });

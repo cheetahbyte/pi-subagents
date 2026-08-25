@@ -1,6 +1,6 @@
 {
   "name": "@tintinweb/pi-subagents",
-  "version": "0.18.0",
+  "version": "0.18.2",
   "description": "A pi extension extension that brings smart Claude Code-style autonomous sub-agents to pi.",
   "author": "tintinweb",
   "license": "MIT",
@@ -42,7 +42,10 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/ test/",
     "lint:fix": "biome check --fix src/ test/",
-    "test:coverage": "vitest run --coverage"
+    "check": "npm run lint && npm run typecheck && npm run test",
+    "test:coverage": "vitest run --coverage",
+    "bench": "vitest bench",
+    "bench:ab": "node test/perf/ab.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.14",
