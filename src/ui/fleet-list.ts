@@ -1,8 +1,8 @@
 /**
  * fleet-list.ts — Claude Code-style "FleetView" full-screen agent picker.
  *
- * ← at an empty prompt opens a full-screen overlay listing `main` plus every
- * retained top-level subagent that has a session (newest first, capped at 30).
+ * ← at an empty prompt opens a full-screen overlay grouping `main` plus every
+ * retained top-level subagent by lifecycle state (capped at 30).
  * ↑/↓ move the selection (filled ● marker), Enter opens the selected agent's
  * live conversation overlay, Esc (or Enter on `main`) returns to the native
  * main transcript. A viewer stays open when its agent finishes; Esc from the
@@ -40,6 +40,20 @@ export type FleetUICtx = {
 type MainEntry = { kind: "main" };
 type AgentEntry = { kind: "agent"; record: AgentRecord };
 type FleetEntry = MainEntry | AgentEntry;
+type FleetGroup = "Queued" | "Running" | "Finished" | "Failed";
+
+const GROUPS: FleetGroup[] = ["Queued", "Running", "Finished", "Failed"];
+
+function fleetGroup(record: AgentRecord): FleetGroup {
+  if (record.status === "queued") return "Queued";
+  if (record.status === "running") return "Running";
+  if (record.status === "completed" || record.status === "steered") return "Finished";
+  return "Failed";
+}
+
+function entryId(entry: FleetEntry): string {
+  return entry.kind === "main" ? "main" : entry.record.id;
+}
 
 /** What the picker overlay reports when it closes. */
 type PickerOutcome =
@@ -150,22 +164,27 @@ export class FleetList {
   // ---- Roster ----
 
   /**
-   * Agents offered by the picker: every retained top-level record that still
-   * has a session, newest first (the manager already sorts `listAgents()` that
-   * way). Retained covers all statuses — running, queued, finished, stopped —
-   * so a completed agent stays openable. Tombstones (evicted records) are only
+   * Agents offered by the picker: every retained top-level record, newest first
+   * within its lifecycle group. Queued records may not have a session yet, so
+   * they are visible but not openable. Tombstones (evicted records) are only
    * reachable via `listTombstones()` and never appear here; nested children are
    * owned by their parent's thread and hidden. Capped so the picker stays
    * responsive on long sessions.
    */
   private agentRecords(): AgentRecord[] {
     return this.manager.listAgents()
-      .filter(a => !a.parentAgentId && a.session)
+      .filter(a => !a.parentAgentId)
       .slice(0, MAX_AGENTS);
   }
 
   private roster(): FleetEntry[] {
-    return [{ kind: "main" }, ...this.agentRecords().map(record => ({ kind: "agent" as const, record }))];
+    const records = this.agentRecords();
+    return [
+      { kind: "main" },
+      ...GROUPS.flatMap(group => records
+        .filter(record => fleetGroup(record) === group)
+        .map(record => ({ kind: "agent" as const, record }))),
+    ];
   }
 
   private clampSelection(): void {
@@ -316,7 +335,7 @@ export class FleetList {
  * opts in via `wantsKeyRelease`) and calls `render()` with the overlay width.
  */
 class FleetPicker {
-  private index: number;
+  private selectedId: string;
 
   constructor(
     private tui: any,
@@ -328,7 +347,7 @@ class FleetPicker {
       done: (outcome: PickerOutcome) => void;
     },
   ) {
-    this.index = deps.initialIndex;
+    this.selectedId = entryId(deps.getRoster()[deps.initialIndex] ?? { kind: "main" });
   }
 
   handleInput(data: string): void {
@@ -336,38 +355,56 @@ class FleetPicker {
     // never be treated as a press here either.
     if (isKeyRelease(data)) return;
     const roster = this.deps.getRoster();
+    let index = roster.findIndex(entry => entryId(entry) === this.selectedId);
+    if (index < 0) index = 0;
     if (matchesKey(data, "down")) {
-      this.index = Math.min(roster.length - 1, this.index + 1);
+      index = Math.min(roster.length - 1, index + 1);
+      this.selectedId = entryId(roster[index]);
       this.tui.requestRender();
     } else if (matchesKey(data, "up")) {
-      this.index = Math.max(0, this.index - 1);
+      index = Math.max(0, index - 1);
+      this.selectedId = entryId(roster[index]);
       this.tui.requestRender();
     } else if (matchesKey(data, "escape")) {
       this.deps.done({ kind: "main" });
     } else if (matchesKey(data, Key.enter)) {
-      const entry = roster[this.index];
+      const entry = roster[index];
       if (entry?.kind === "main") this.deps.done({ kind: "main" });
-      else if (entry?.kind === "agent") this.deps.done({ kind: "open", record: entry.record });
+      else if (entry?.kind === "agent" && entry.record.session) this.deps.done({ kind: "open", record: entry.record });
     }
   }
 
   render(width: number): string[] {
     const rows = Math.max(1, this.tui.terminal.rows ?? 1);
     const roster = this.deps.getRoster();
-    const sel = Math.min(this.index, roster.length - 1);
+    let sel = roster.findIndex(entry => entryId(entry) === this.selectedId);
+    if (sel < 0) {
+      sel = 0;
+      this.selectedId = "main";
+    }
     const th = this.theme;
+    const display: Array<{ entry?: FleetEntry; rosterIndex?: number; text?: string }> = [
+      { entry: roster[0], rosterIndex: 0 },
+    ];
+    for (const group of GROUPS) {
+      const entries = roster
+        .map((entry, rosterIndex) => ({ entry, rosterIndex }))
+        .filter(item => item.entry.kind === "agent" && fleetGroup(item.entry.record) === group);
+      display.push({ text: `  ${th.fg("dim", `${group} (${entries.length})`)}` }, ...entries);
+    }
+    const selectedLine = display.findIndex(line => line.rosterIndex === sel);
     // Hint + blank separator top the list; the terminal height bounds the rest.
     const header = rows >= 3 ? 2 : 1;
     const budget = Math.max(0, rows - header);
-    let visible = Math.min(roster.length, budget);
-    let start = sel < visible ? 0 : sel - visible + 1;
-    let below = roster.length - (start + visible);
+    let visible = Math.min(display.length, budget);
+    let start = selectedLine < visible ? 0 : selectedLine - visible + 1;
+    let below = display.length - (start + visible);
     // The window plus its "↑ N more"/"↓ N more" indicators must fit the budget —
     // shrink (and re-center) until they do.
     while (visible > 0 && visible + (start > 0 ? 1 : 0) + (below > 0 ? 1 : 0) > budget) {
       visible -= 1;
-      start = sel < visible ? 0 : sel - visible + 1;
-      below = roster.length - (start + visible);
+      start = selectedLine < visible ? 0 : selectedLine - visible + 1;
+      below = display.length - (start + visible);
     }
 
     const lines: string[] = [
@@ -376,7 +413,10 @@ class FleetPicker {
     if (header === 2) lines.push("");
     if (start > 0) lines.push(rightAlign("", th.fg("dim", `↑ ${start} more`), width));
     for (let r = start; r < start + visible; r++) {
-      lines.push(this.row(r, sel, roster[r], width));
+      const line = display[r];
+      lines.push(line.entry && line.rosterIndex !== undefined
+        ? this.row(line.rosterIndex, sel, line.entry, width)
+        : truncateToWidth(line.text ?? "", width));
     }
     if (below > 0) lines.push(rightAlign("", th.fg("dim", `↓ ${below} more`), width));
     // Fill the rest of the screen so the overlay covers the terminal.

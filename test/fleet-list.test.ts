@@ -271,10 +271,48 @@ describe("FleetList picker roster", () => {
     expect(lines).toContain("finished one"); // retained, not just running/recent
     expect(lines).toContain("stopped one");
     expect(lines).not.toContain("nested-child");
-    expect(lines).not.toContain("queued one"); // no session yet
-    // Manager order is newest-first and the picker keeps it.
+    expect(lines).toContain("queued one"); // visible before its session starts
+    // Lifecycle groups override manager order; order within each group stays stable.
+    expect(lines.indexOf("queued one")).toBeLessThan(lines.indexOf("running one"));
     expect(lines.indexOf("running one")).toBeLessThan(lines.indexOf("finished one"));
     expect(lines.indexOf("finished one")).toBeLessThan(lines.indexOf("stopped one"));
+  });
+
+  it("groups every lifecycle status under a counted heading", () => {
+    const h = harness([
+      makeRecord({ id: "queued", description: "queued agent", status: "queued", session: undefined }),
+      makeRecord({ id: "running", description: "running agent", status: "running" }),
+      makeRecord({ id: "completed", description: "completed agent", status: "completed" }),
+      makeRecord({ id: "steered", description: "steered agent", status: "steered" }),
+      makeRecord({ id: "aborted", description: "aborted agent", status: "aborted" }),
+      makeRecord({ id: "stopped", description: "stopped agent", status: "stopped" }),
+      makeRecord({ id: "error", description: "error agent", status: "error" }),
+    ]);
+    h.tui.terminal.rows = 20;
+    openPicker(h);
+    const lines = h.render().join("\n");
+    expect(lines).toContain("Queued (1)");
+    expect(lines).toContain("Running (1)");
+    expect(lines).toContain("Finished (2)");
+    expect(lines).toContain("Failed (3)");
+    expect(lines.indexOf("Queued (1)")).toBeLessThan(lines.indexOf("queued agent"));
+    expect(lines.indexOf("Running (1)")).toBeLessThan(lines.indexOf("running agent"));
+    expect(lines.indexOf("Finished (2)")).toBeLessThan(lines.indexOf("completed agent"));
+    expect(lines.indexOf("Failed (3)")).toBeLessThan(lines.indexOf("aborted agent"));
+  });
+
+  it("keeps the selected agent when its status moves it to another group", () => {
+    const agents = [
+      makeRecord({ id: "moving", description: "moving agent", status: "running" }),
+      makeRecord({ id: "other", description: "other agent", status: "running" }),
+    ];
+    const h = harness(agents);
+    openPicker(h);
+    h.overlayKey(DOWN);
+    expect(h.render().find(line => line.includes("moving agent"))).toContain("●");
+    agents[0] = makeRecord({ id: "moving", description: "moving agent", status: "completed" });
+    expect(h.render().find(line => line.includes("moving agent"))).toContain("●");
+    expect(h.render().find(line => line.includes("other agent"))).toContain("○");
   });
 
   it("caps the roster at 30 agents", () => {
@@ -292,9 +330,9 @@ describe("FleetList picker roster", () => {
     const agents = Array.from({ length: 8 }, (_, i) =>
       makeRecord({ id: `a${i}`, description: `report ${i}` }));
     const h = harness(agents);
-    h.tui.terminal.rows = 10; // hint + blank + 7 rows + "↓ 2 more" = 10 lines
+    h.tui.terminal.rows = 10; // hint + blank + 7 display lines + overflow = 10 lines
     openPicker(h);
-    expect(h.render(120).some(l => l.includes("↓ 2 more"))).toBe(true);
+    expect(h.render(120).some(l => l.includes("↓ 6 more"))).toBe(true);
     expect(h.render(120)).toHaveLength(10); // every line fits the terminal
   });
 
