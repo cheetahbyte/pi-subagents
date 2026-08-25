@@ -3,10 +3,9 @@
  *
  * ← at an empty prompt opens a full-screen overlay grouping `main` plus every
  * retained top-level subagent by lifecycle state (capped at 30).
- * ↑/↓ move the selection (filled ● marker), Enter opens the selected agent's
- * live conversation overlay, Esc (or Enter on `main`) returns to the native
- * main transcript. A viewer stays open when its agent finishes; Esc from the
- * viewer returns to the picker with the selection preserved.
+ * ↑/↓ move the selection (filled ● marker), Enter swaps the native transcript
+ * to the selected agent, and Esc returns to main. Older Pi versions that cannot
+ * be patched fall back to the conversation overlay.
  *
  * Mechanics: all key handling goes through `onTerminalInput` — which fires
  * before the focused editor and can `consume` keys — gated on the editor
@@ -22,6 +21,7 @@ import type { AgentRecord } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
 import { type AgentActivity, formatCost, type Theme } from "./agent-widget.js";
 import { ConversationViewer, VIEWPORT_HEIGHT_PCT } from "./conversation-viewer.js";
+import { transcriptOverride } from "./transcript-override.js";
 
 /** Max agent rows in the picker roster; older agents beyond this are dropped. */
 const MAX_AGENTS = 30;
@@ -30,6 +30,7 @@ const MAX_AGENTS = 30;
 export type FleetUICtx = {
   onTerminalInput(handler: (data: string) => { consume?: boolean; data?: string } | undefined): () => void;
   getEditorText(): string;
+  setEditorText?(text: string): void;
   notify(message: string, type?: "info" | "warning" | "error"): void;
   custom<T>(
     factory: (tui: any, theme: Theme, keybindings: any, done: (result: T) => void) => { render(width: number): string[]; invalidate(): void; dispose?(): void },
@@ -94,7 +95,7 @@ export class FleetList {
   private inputUnsub: (() => void) | undefined;
 
   private enabled = true;
-  /** True while the picker or a conversation viewer overlay is on screen. */
+  /** True while the picker or fallback conversation viewer is on screen. */
   private overlayOpen = false;
   /** 0 = `main`, 1..N = subagents. Seeds each picker; preserved across viewer round-trips. */
   private selectedIndex = 0;
@@ -121,7 +122,11 @@ export class FleetList {
   setEnabled(enabled: boolean): void {
     if (enabled === this.enabled) return;
     this.enabled = enabled;
-    if (!enabled) this.closeOverlay();
+    if (!enabled) {
+      transcriptOverride.clear();
+      this.viewingAgentId = undefined;
+      this.closeOverlay();
+    }
   }
 
   /** Capture the UI context and (re)register the global input handler. */
@@ -141,6 +146,7 @@ export class FleetList {
   onAgentFinished(_id: string): void {}
 
   dispose(): void {
+    transcriptOverride.clear();
     this.inputUnsub?.();
     this.inputUnsub = undefined;
     this.closeOverlay();
@@ -209,8 +215,30 @@ export class FleetList {
     // anything but the editor owns the keyboard, stay out of its keys (#123).
     if (!this.editorHasFocus()) return undefined;
 
+    const editorText = this.ui.getEditorText();
+    if (this.viewingAgentId) {
+      if (matchesKey(data, "escape") && editorText === "") {
+        transcriptOverride.clear();
+        this.viewingAgentId = undefined;
+        this.selectedIndex = 0;
+        return { consume: true };
+      }
+      if (matchesKey(data, Key.enter)) {
+        const message = editorText.trim();
+        if (message.startsWith("/") || message.startsWith("@")) {
+          transcriptOverride.clear();
+          this.viewingAgentId = undefined;
+          this.selectedIndex = 0;
+          return undefined;
+        }
+        if (message && this.manager.steer(this.viewingAgentId, message)) this.ui.setEditorText?.("");
+        else if (message) this.ui.notify("This agent can no longer be steered.", "warning");
+        return { consume: true };
+      }
+    }
+
     // ← at an empty prompt opens the picker; every other key flows to the editor.
-    if (matchesKey(data, "left") && this.ui.getEditorText() === "") {
+    if (matchesKey(data, "left") && editorText === "") {
       this.openPicker();
       return { consume: true };
     }
@@ -268,9 +296,13 @@ export class FleetList {
     this.overlayOpen = false;
     if (this.suppressReopen) { this.suppressReopen = false; return; }
     if (outcome.kind === "main") {
+      transcriptOverride.clear();
+      this.viewingAgentId = undefined;
       this.selectedIndex = 0; // fresh start next time
       return;
     }
+    const index = this.roster().findIndex(entry => entry.kind === "agent" && entry.record.id === outcome.record.id);
+    if (index >= 0) this.selectedIndex = index;
     this.openViewer(outcome.record);
   }
 
@@ -280,6 +312,10 @@ export class FleetList {
    */
   private openViewer(record: AgentRecord): void {
     if (!this.ui || !record.session) return;
+    if (this.ui.setEditorText && transcriptOverride.show(record.session)) {
+      this.viewingAgentId = record.id;
+      return;
+    }
     this.overlayOpen = true;
     this.viewingAgentId = record.id;
     const session = record.session;

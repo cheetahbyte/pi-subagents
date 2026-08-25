@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **FleetView displays a selected subagent in Pi's native transcript.** The extension uses a guarded private compatibility patch because Pi does not expose transcript replacement; unsupported Pi versions retain the existing conversation overlay. Selecting `main`, pressing Esc, disabling FleetView, or unloading the extension restores the parent transcript without mutating either session.
+
 ## [0.18.2] - 2026-08-24
 
 ### Added
