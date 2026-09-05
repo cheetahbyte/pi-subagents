@@ -619,7 +619,10 @@ export class AgentWidget {
     }
     if (newStatusText !== this.lastStatusText) {
       this.uiCtx.setStatus("subagents", newStatusText);
-      this.publishStatus(newStatusText ?? null);
+      this.publishStatus([
+        runningCount > 0 ? `󱚥 ${runningCount}` : "",
+        queuedCount > 0 ? `󱚠 ${queuedCount}` : "",
+      ].filter(Boolean).join(" ") || null);
       this.lastStatusText = newStatusText;
     }
 

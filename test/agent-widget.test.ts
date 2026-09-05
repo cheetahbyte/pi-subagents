@@ -107,12 +107,14 @@ describe("AgentWidget", () => {
       .join("\n");
   }
 
-  it("publishes top-level status updates without workflow children to pi-footer", () => {
+  it("publishes icon counts without workflow children to pi-footer", () => {
     const agent = makeRecord("background", { isBackground: true });
+    const queued = makeRecord("queued", { isBackground: true });
+    queued.status = "queued";
     const workflowChild = makeRecord("workflow-child", { isBackground: true, workflowId: "wf_abc" });
     const published: Array<string | null> = [];
     const widget = new AgentWidget(
-      { listAgents: () => [agent, workflowChild] } as any,
+      { listAgents: () => [agent, queued, workflowChild] } as any,
       new Map([[agent.id, makeActivity()]]),
       () => "background",
       () => false,
@@ -124,8 +126,10 @@ describe("AgentWidget", () => {
     widget.update();
     agent.status = "completed";
     widget.update();
+    queued.status = "completed";
+    widget.update();
 
-    expect(published).toEqual(["1 running agent", null]);
+    expect(published).toEqual(["󱚥 1 󱚠 1", "󱚠 1", null]);
   });
 
   // "all" (and the no-policy constructor default) shows every agent.
