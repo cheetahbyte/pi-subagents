@@ -2,10 +2,12 @@
  * fleet-list.ts — Claude Code-style "FleetView" full-screen agent picker.
  *
  * ← at an empty prompt opens a full-screen overlay grouping `main` plus every
- * retained top-level subagent by lifecycle state (capped at 30).
- * ↑/↓ move the selection (filled ● marker), Enter swaps the native transcript
- * to the selected agent, and Esc returns to main. Older Pi versions that cannot
- * be patched fall back to the conversation overlay.
+ * retained top-level subagent by lifecycle state (capped at 30). Workflow runs
+ * injected via `setWorkflowSource` sit above the agent groups: Enter on a run
+ * opens the extension's inspector (never steering, never the native
+ * transcript). ↑/↓ move the selection (filled ● marker), Enter swaps the native
+ * transcript to the selected agent, and Esc returns to main. Older Pi versions
+ * that cannot be patched fall back to the conversation overlay.
  *
  * Mechanics: all key handling goes through `onTerminalInput` — which fires
  * before the focused editor and can `consume` keys — gated on the editor
@@ -16,8 +18,8 @@
 
 import { Editor, isKeyRelease, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { hasAgentBadge, renderAgentName } from "../agent-color.js";
-import type { AgentManager } from "../agent-manager.js";
-import type { AgentRecord } from "../types.js";
+import { type AgentManager, isTopLevelAgent } from "../agent-manager.js";
+import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
 import { type AgentActivity, formatCost, type Theme } from "./agent-widget.js";
 import { ConversationViewer, VIEWPORT_HEIGHT_PCT } from "./conversation-viewer.js";
@@ -25,6 +27,8 @@ import { transcriptOverride } from "./transcript-override.js";
 
 /** Max agent rows in the picker roster; older agents beyond this are dropped. */
 const MAX_AGENTS = 30;
+/** How long a settled workflow run lingers in the picker before it drops out. */
+const FINISHED_LINGER_MS = 4000;
 
 /** Minimal UI surface the picker needs from `ctx.ui` (structural subset). */
 export type FleetUICtx = {
@@ -38,9 +42,30 @@ export type FleetUICtx = {
   ): Promise<T>;
 };
 
+/**
+ * A workflow run, as the fleet list needs to see it.
+ *
+ * Narrow on purpose: the list knows nothing about `WorkflowTask`, the runtime
+ * or the dialog, so it stays as testable as it was when it only held agents.
+ * The extension maps its tasks into this shape and injects an opener.
+ */
+export interface FleetWorkflow {
+  id: string;
+  /** The `meta.name` of the run, or its id when the script named nothing. */
+  name: string;
+  status: "running" | "completed" | "failed" | "killed" | "paused";
+  doneCount: number;
+  totalCount: number;
+  startedAt: number;
+  /** Set once the run settles, which is what freezes its clock. */
+  completedAt?: number;
+  tokens: number;
+}
+
 type MainEntry = { kind: "main" };
 type AgentEntry = { kind: "agent"; record: AgentRecord };
-type FleetEntry = MainEntry | AgentEntry;
+type WorkflowEntry = { kind: "workflow"; workflow: FleetWorkflow };
+type FleetEntry = MainEntry | WorkflowEntry | AgentEntry;
 type FleetGroup = "Queued" | "Running" | "Finished" | "Failed";
 
 const GROUPS: FleetGroup[] = ["Queued", "Running", "Finished", "Failed"];
@@ -53,13 +78,14 @@ function fleetGroup(record: AgentRecord): FleetGroup {
 }
 
 function entryId(entry: FleetEntry): string {
-  return entry.kind === "main" ? "main" : entry.record.id;
+  return entry.kind === "main" ? "main" : entry.kind === "workflow" ? entry.workflow.id : entry.record.id;
 }
 
 /** What the picker overlay reports when it closes. */
 type PickerOutcome =
   | { kind: "main" }                       // Esc, or Enter on `main` → native main transcript
-  | { kind: "open"; record: AgentRecord }; // Enter on an agent → conversation viewer
+  | { kind: "open"; record: AgentRecord }  // Enter on an agent → conversation viewer
+  | { kind: "workflow"; workflow: FleetWorkflow }; // Enter on a run → extension's inspector
 
 /** `11s` — integer seconds, no decimal/suffix (matches Claude Code, unlike formatMs). */
 export function formatFleetElapsed(ms: number): string {
@@ -105,6 +131,17 @@ export class FleetList {
   private pickerClose: (() => void) | undefined;
   private viewerClose: (() => void) | undefined;
   private viewingAgentId: string | undefined;
+  /** Injected by the extension; absent until workflows are wired (or at all). */
+  private workflowSource: (() => readonly FleetWorkflow[]) | undefined;
+  private openWorkflow: ((id: string) => Promise<void> | void) | undefined;
+  /**
+   * Set while the workflow inspector is up.
+   *
+   * It does the two jobs `viewerClose` does for an agent's overlay — keep the
+   * picker out of the dialog's keys, and remember which row to come back to —
+   * minus the close handle, because that overlay belongs to the extension.
+   */
+  private viewingWorkflowId: string | undefined;
 
   constructor(
     private manager: AgentManager,
@@ -115,6 +152,18 @@ export class FleetList {
      * `showCost` setting.
      */
     private showCost: () => boolean = () => false,
+    /**
+     * The user's `viewerMarkdown` setting, for a conversation overlay opened
+     * from here. Read live rather than captured, because the viewer's `m` key
+     * changes it while the overlay is up. Omitted → the viewer's own default.
+     */
+    private viewerMarkdown?: () => ViewerMarkdownMode,
+    /**
+     * Persist a mode chosen with `m` in that overlay, so the key means the same
+     * thing here as it does from `/agents` — one setting, not one per entry
+     * point. Omitted → `m` still cycles, viewer-locally.
+     */
+    private onViewerMarkdown?: (mode: ViewerMarkdownMode) => void,
   ) {}
 
   // ---- Lifecycle ----
@@ -126,6 +175,12 @@ export class FleetList {
       transcriptOverride.clear();
       this.viewingAgentId = undefined;
       this.closeOverlay();
+      if (this.viewingWorkflowId !== undefined) {
+        // The inspector belongs to the extension — no handle to close — but its
+        // settle promise must not reopen the picker while disabled.
+        this.suppressReopen = true;
+        this.viewingWorkflowId = undefined;
+      }
     }
   }
 
@@ -151,6 +206,9 @@ export class FleetList {
     this.inputUnsub = undefined;
     this.closeOverlay();
     this.viewingAgentId = undefined;
+    // No handle to close the workflow inspector with, but the list is going
+    // away — leaving the id set would keep it swallowing input forever.
+    this.viewingWorkflowId = undefined;
     this.tui = undefined;
     this.selectedIndex = 0;
     // Null last so the overlay-close microtask can't reach a live ui.
@@ -167,26 +225,63 @@ export class FleetList {
     close?.();
   }
 
+  // ---- Workflow source ----
+
+  /**
+   * Wire workflow runs into the picker.
+   *
+   * Injected rather than constructed here because the fleet list predates
+   * workflows and must keep working without them — a session with the feature
+   * switched off never calls this, and the roster is agents-only exactly as
+   * before.
+   */
+  setWorkflowSource(
+    source: () => readonly FleetWorkflow[],
+    open: (id: string) => Promise<void> | void,
+  ): void {
+    this.workflowSource = source;
+    this.openWorkflow = open;
+  }
+
+  /** Live runs, plus recently settled ones — a settled run lingers briefly before dropping out. */
+  private workflows(): FleetWorkflow[] {
+    if (!this.workflowSource) return [];
+    const now = Date.now();
+    return [...this.workflowSource()]
+      .filter(run =>
+        run.status === "running"
+        || run.status === "paused"
+        || (run.completedAt != null && now - run.completedAt < FINISHED_LINGER_MS)
+      )
+      .sort((a, b) => a.startedAt - b.startedAt);
+  }
+
   // ---- Roster ----
 
   /**
    * Agents offered by the picker: every retained top-level record, newest first
    * within its lifecycle group. Queued records may not have a session yet, so
    * they are visible but not openable. Tombstones (evicted records) are only
-   * reachable via `listTombstones()` and never appear here; nested children are
-   * owned by their parent's thread and hidden. Capped so the picker stays
-   * responsive on long sessions.
+   * reachable via `listTombstones()` and never appear here; children owned by
+   * an agent or workflow are hidden behind their owner. Capped so the picker
+   * stays responsive on long sessions.
    */
   private agentRecords(): AgentRecord[] {
     return this.manager.listAgents()
-      .filter(a => !a.parentAgentId)
+      .filter(a => isTopLevelAgent(a))
       .slice(0, MAX_AGENTS);
   }
 
+  /**
+   * Runs sit above the agent groups rather than interleaved by start time: a
+   * run owns most of the agents under it, so listing the container first is
+   * what makes the picker read as a hierarchy rather than a shuffle.
+   */
   private roster(): FleetEntry[] {
     const records = this.agentRecords();
     return [
       { kind: "main" },
+      ...this.workflows().map(workflow => ({ kind: "workflow" as const, workflow })),
       ...GROUPS.flatMap(group => records
         .filter(record => fleetGroup(record) === group)
         .map(record => ({ kind: "agent" as const, record }))),
@@ -207,8 +302,12 @@ export class FleetList {
     // Input listeners receive BOTH key-press and key-release (the kitty protocol
     // emits both, and matchesKey matches either) — act on press only.
     if (isKeyRelease(data)) return undefined;
-    // While an overlay is open, it owns all input.
-    if (this.overlayOpen) return undefined;
+    // While an overlay is open, it owns all input. Checked before the focus
+    // test below, which would otherwise read the dialog holding the keyboard as
+    // "the user left the prompt" and reset the selection out from under it.
+    // The workflow inspector has no overlay of ours (the extension owns it),
+    // so it is gated the same way by id.
+    if (this.overlayOpen || this.viewingWorkflowId) return undefined;
     // Input listeners fire BEFORE the focused component, and dialogs
     // (ctx.ui.select/confirm/input, pi's own menus) swap the prompt editor out
     // while getEditorText() still reads the detached — empty — editor. So when
@@ -290,7 +389,7 @@ export class FleetList {
     );
   }
 
-  /** Picker closed: `main` ends the flow; an agent hands off to its viewer. */
+  /** Picker closed: `main` ends the flow; an agent hands off to its viewer; a run to its inspector. */
   private pickerClosed(outcome: PickerOutcome): void {
     this.pickerClose = undefined;
     this.overlayOpen = false;
@@ -301,9 +400,52 @@ export class FleetList {
       this.selectedIndex = 0; // fresh start next time
       return;
     }
+    if (outcome.kind === "workflow") {
+      this.openWorkflowInspector(outcome.workflow);
+      return;
+    }
     const index = this.roster().findIndex(entry => entry.kind === "agent" && entry.record.id === outcome.record.id);
     if (index >= 0) this.selectedIndex = index;
     this.openViewer(outcome.record);
+  }
+
+  /**
+   * Open the extension-owned workflow inspector.
+   *
+   * No close handle — the extension's dialog owns its own overlay and closes
+   * it, and its promise resolves when it comes down — but the picker still has
+   * to know one is up (its keys must not leak to the prompt) and still has to
+   * put the cursor back on the run when it closes. The native child transcript
+   * (and the agent id that drives it) is dropped first so the inspector reads
+   * only what it opens, and nothing of the child's session survives the trip.
+   */
+  private openWorkflowInspector(workflow: FleetWorkflow): void {
+    if (!this.ui || !this.openWorkflow) return;
+    transcriptOverride.clear();
+    this.viewingAgentId = undefined;
+    this.viewingWorkflowId = workflow.id;
+    void Promise.resolve(this.openWorkflow(workflow.id)).then(
+      () => this.workflowInspectorClosed(),
+      () => this.workflowInspectorClosed(),
+    );
+  }
+
+  /**
+   * Inspector closed (the extension called its dialog's done) — reopen the
+   * picker with the selection on the run we were inspecting. Re-resolve by id
+   * so it still lands right if the roster reordered while the dialog was up.
+   * A disable/dispose consumed `suppressReopen` instead: nothing reopens, and
+   * the flag is spent so the next picker works normally.
+   */
+  private workflowInspectorClosed(): void {
+    const inspected = this.viewingWorkflowId;
+    this.viewingWorkflowId = undefined;
+    if (this.suppressReopen) { this.suppressReopen = false; return; }
+    if (inspected !== undefined) {
+      const idx = this.roster().findIndex(entry => entry.kind === "workflow" && entry.workflow.id === inspected);
+      if (idx >= 0) this.selectedIndex = idx;
+    }
+    this.openPicker();
   }
 
   /**
@@ -336,6 +478,8 @@ export class FleetList {
           keybindings,
           (message: string) => this.manager.steer(record.id, message),
           this.showCost(),
+          this.viewerMarkdown,
+          this.onViewerMarkdown,
         );
       },
       {
@@ -407,6 +551,7 @@ class FleetPicker {
       const entry = roster[index];
       if (entry?.kind === "main") this.deps.done({ kind: "main" });
       else if (entry?.kind === "agent" && entry.record.session) this.deps.done({ kind: "open", record: entry.record });
+      else if (entry?.kind === "workflow") this.deps.done({ kind: "workflow", workflow: entry.workflow });
     }
   }
 
@@ -422,6 +567,14 @@ class FleetPicker {
     const display: Array<{ entry?: FleetEntry; rosterIndex?: number; text?: string }> = [
       { entry: roster[0], rosterIndex: 0 },
     ];
+    // Workflows form their own section above the agent groups: a run owns most
+    // of the agents under it, so the container comes first.
+    const workflows = roster
+      .map((entry, rosterIndex) => ({ entry, rosterIndex }))
+      .filter(item => item.entry.kind === "workflow");
+    if (workflows.length > 0) {
+      display.push({ text: `  ${th.fg("dim", `Workflows (${workflows.length})`)}` }, ...workflows);
+    }
     for (const group of GROUPS) {
       const entries = roster
         .map((entry, rosterIndex) => ({ entry, rosterIndex }))
@@ -469,12 +622,33 @@ class FleetPicker {
     if (entry.kind === "main") {
       return truncateToWidth(`  ${this.bullet(rosterIndex, sel)} main`, width);
     }
+    if (entry.kind === "workflow") {
+      return this.workflowRow(rosterIndex, sel, entry.workflow, width);
+    }
     return this.agentRow(rosterIndex, sel, entry.record, width);
   }
 
   private bullet(rosterIndex: number, sel: number): string {
     const th = this.theme;
     return rosterIndex === sel ? th.fg("accent", "●") : th.fg("dim", "○");
+  }
+
+  /**
+   * A run's row. Shaped like an agent's — bullet, kind, name, stats flush right
+   * — so the two read as one list, with the agent count where an agent has its
+   * description and the same elapsed/token tail.
+   */
+  private workflowRow(rosterIndex: number, sel: number, workflow: FleetWorkflow, width: number): string {
+    const th = this.theme;
+    const selected = rosterIndex === sel;
+    const kind = th.fg(selected ? "text" : "muted", "workflow");
+    const name = selected ? th.fg("text", workflow.name) : workflow.name;
+    const left = `  ${this.bullet(rosterIndex, sel)} ${kind}  ${name}`;
+    // Frozen once the run settles, exactly as an agent's clock is.
+    const elapsed = (workflow.completedAt ?? Date.now()) - workflow.startedAt;
+    const agents = `${workflow.doneCount}/${workflow.totalCount} agent${workflow.totalCount === 1 ? "" : "s"}`;
+    const stats = `${agents} · ${formatFleetElapsed(elapsed)} · ${formatFleetTokens(workflow.tokens)}`;
+    return rightAlign(left, selected ? th.fg("text", stats) : th.fg("dim", stats), width);
   }
 
   private agentRow(rosterIndex: number, sel: number, record: AgentRecord, width: number): string {

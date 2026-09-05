@@ -199,8 +199,10 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
 
     const toolsSeen = new Map<string, string[]>();
     const KID_CONTINUED = "KID-CONTINUED-WITH:";
+    let markKidStarted!: () => void;
+    const kidStarted = new Promise<void>((resolve) => { markKidStarted = resolve; });
 
-    const respond = (context: Context): FauxReply => {
+    const respond = async (context: Context): Promise<FauxReply> => {
       const text = firstUserText(context).toLowerCase();
       const names = (context.tools ?? []).map((t) => t.name);
       const results = toolResultTexts(context);
@@ -213,6 +215,7 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
       // call blocks until the parent answers; only then does this turn run again.
       if (text.includes("ask my parent a question")) {
         toolsSeen.set("kid", names);
+        markKidStarted();
         const asked = results.find((r) => r.name === "ask_parent");
         if (asked) {
           // Reachable ONLY if ask_parent resolved — i.e. the parent answered and
@@ -226,7 +229,12 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
       // instantly, so a parent that keeps turning starves its background
       // children; parking on a blocking `wait: true` poll is what lets the kid
       // run — and ask — while the parent stays alive and answerable.
-      if (text.includes("ring the bell")) return "BELL-DONE";
+      if (text.includes("ring the bell")) {
+        // The bell must not finish before the kid starts: otherwise repeated
+        // instant polls can exhaust the faux response queue during child setup.
+        await kidStarted;
+        return "BELL-DONE";
+      }
 
       // PARENT — a nested agent that owns the kid. It spawns the kid plus a
       // bell in the background (one per turn, so the two spawn envelopes are

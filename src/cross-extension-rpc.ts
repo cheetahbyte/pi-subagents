@@ -7,10 +7,16 @@
  * Reply envelope follows pi-mono convention:
  *   success → { success: true, data?: T }
  *   error   → { success: false, error: string }
+ *
+ * @see docs/rpc.md — the caller-facing integration reference: spawn options
+ * (including the fields spawnTopLevel strips), every error string, the
+ * completion-notification race, and what protocol version 2 does not promise.
  */
 
+import { isTopLevelAgent } from "./agent-manager.js";
 import { type ModelRegistry, resolveModel } from "./model-resolver.js";
 import { checkModelScope } from "./model-scope.js";
+import type { AgentRecord } from "./types.js";
 
 /** Minimal event bus interface needed by the RPC handlers. */
 export interface EventBus {
@@ -29,7 +35,15 @@ export const PROTOCOL_VERSION = 2;
 /** Minimal AgentManager interface needed by the spawn/stop/consume RPCs. */
 export interface SpawnCapable {
   spawn(pi: unknown, ctx: unknown, type: string, prompt: string, options: any): string;
+  /** Resolves once the spawned agent is running; rejects on a startup failure. */
+  awaitStartup(id: string): Promise<void>;
   abort(id: string): boolean;
+  /**
+   * The record behind an id, for the stop handler's ownership check. Narrowed
+   * to the two fields `isTopLevelAgent` reads, so the RPC layer keeps its
+   * deliberately shallow view of the manager.
+   */
+  getRecord(id: string): Pick<AgentRecord, "parentAgentId" | "workflowId"> | undefined;
   /**
    * Mark a settled agent's result as read by the caller, suppressing the
    * completion notification — what `get_subagent_result` does when it returns
@@ -88,7 +102,7 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
   });
 
   const unsubSpawn = handleRpc<{ requestId: string; type: string; prompt: string; options?: any }>(
-    events, "subagents:rpc:spawn", ({ type, prompt, options }) => {
+    events, "subagents:rpc:spawn", async ({ type, prompt, options }) => {
       const ctx = getCtx();
       if (!ctx) throw new Error("No active session");
 
@@ -141,13 +155,31 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
         if (verdict.kind === "error") throw new Error(verdict.message);
       }
 
-      return { id: manager.spawn(pi, ctx, type, prompt, normalizedOptions) };
+      const id = manager.spawn(pi, ctx, type, prompt, normalizedOptions);
+      // With isolation: "worktree" the agent starts asynchronously — wait for
+      // it, so a strict-isolation failure is still an error envelope rather
+      // than an id for an agent that never ran.
+      await manager.awaitStartup(id);
+      return { id };
     },
   );
 
   const unsubStop = handleRpc<{ requestId: string; agentId: string }>(
     events, "subagents:rpc:stop", ({ agentId }) => {
-      if (!manager.abort(agentId)) throw new Error("Agent not found");
+      const record = manager.getRecord(agentId);
+      if (!record) throw new Error("Agent not found");
+      // Only the session's own agents are this RPC's to stop. A nested child or
+      // a workflow's agent is owned by something that is *waiting on it*, and
+      // aborting it out from under that owner turns another extension's stop
+      // into a failed step here. Defence in depth rather than a live hole: no
+      // RPC hands out agent ids, so a caller has no ordinary way to name one it
+      // does not own — but the guard is cheap and the id may leak some other
+      // way. Same refuse-what-we-should-not-touch stance as `consume` below.
+      if (!isTopLevelAgent(record)) throw new Error("Agent is owned by another agent or workflow");
+      // Not "not found" — the lookup above already proved it exists. `abort`
+      // returns false only for a record that is neither running nor queued,
+      // which is an agent that has already finished.
+      if (!manager.abort(agentId)) throw new Error("Agent is not running");
     },
   );
 

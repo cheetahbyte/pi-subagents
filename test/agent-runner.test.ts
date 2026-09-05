@@ -33,10 +33,11 @@ const {
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
   createAgentSession,
-  // runAgent builds its custom tools via defineTool (child→parent question
-  // tools); the pass-through keeps the tool objects intact for customTools/name
-  // assertions.
-  defineTool: (tool: any) => tool,
+  // Identity, as pi's own is: `defineTool` exists for the type inference — the
+  // child→parent question tools and the structured-output tool are both built
+  // through it, and the pass-through keeps the tool objects intact for
+  // customTools/name assertions.
+  defineTool: (definition: unknown) => definition,
   // Mock loader simulates pi-mono: reload() applies additionalExtensionPaths
   // (an unknown path becomes an error row, mirroring a failed load) and then
   // runs extensionsOverride over the result.
@@ -141,6 +142,7 @@ import {
   setGraceTurns,
   setRememberAgents,
 } from "../src/agent-runner.js";
+import { compileJsonSchema } from "../src/workflow/json-schema.js";
 
 /** The most recent session built by `createSession` — read by `lastToolsPassed()`. */
 let lastSession: ReturnType<typeof createSession>["session"] | undefined;
@@ -276,6 +278,31 @@ describe("agent-runner final output capture", () => {
 
     await runAgent(ctx, "Explore", "Say ISOLATED", { pi });
     expect(vi.mocked(buildAgentPrompt).mock.lastCall![4]).not.toHaveProperty("worktreeBase");
+  });
+
+  it("marks a workflow child so its prompt says the final text is the return value", async () => {
+    const { buildAgentPrompt } = await import("../src/prompts.js");
+    const { session } = createSession("RAW");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "List the files", { pi, workflow: true });
+    expect(vi.mocked(buildAgentPrompt).mock.lastCall![4]).toMatchObject({ workflowChild: true });
+
+    await runAgent(ctx, "Explore", "List the files", { pi });
+    expect(vi.mocked(buildAgentPrompt).mock.lastCall![4]).not.toHaveProperty("workflowChild");
+  });
+
+  it("leaves the block off a schema-bearing child, which answers through StructuredOutput", async () => {
+    const { buildAgentPrompt } = await import("../src/prompts.js");
+    const { session } = createSession("RAW");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "List the files", {
+      pi,
+      workflow: true,
+      structuredOutput: { schema: { type: "object" }, check: () => true },
+    });
+    expect(vi.mocked(buildAgentPrompt).mock.lastCall![4]).not.toHaveProperty("workflowChild");
   });
 
   it("passes the parent model runtime while retaining the legacy model registry", async () => {
@@ -806,6 +833,31 @@ function mockRegistry(opts: Record<string, any>): string[] {
  * asserting on it means these tests exercise the narrowing rather than a
  * reimplementation of pi's gate.
  */
+/** A compiled schema for the structured-output tests. */
+const STRUCTURED = (() => {
+  const compilation = compileJsonSchema({
+    type: "object",
+    properties: { answer: { type: "string" } },
+    required: ["answer"],
+  });
+  if (!compilation.ok) throw new Error(compilation.message);
+  return compilation.compiled;
+})();
+
+/** One of the tools injected into the session as `customTools`, by name. */
+function customTool(name: string): { execute(id: string, params: unknown): Promise<unknown> } {
+  const opts = createAgentSession.mock.calls[0][0];
+  const tool = ((opts.customTools ?? []) as { name: string }[]).find(t => t.name === name);
+  if (!tool) throw new Error(`no customTool named ${name}`);
+  return tool as unknown as { execute(id: string, params: unknown): Promise<unknown> };
+}
+
+/** Names of the tools injected into the session as `customTools`. */
+function customToolNames(): string[] {
+  const opts = createAgentSession.mock.calls[0][0];
+  return ((opts.customTools ?? []) as { name: string }[]).map(tool => tool.name);
+}
+
 function lastToolsPassed(): string[] {
   const opts = createAgentSession.mock.calls[0][0];
   if (opts.tools) return opts.tools;
@@ -1359,6 +1411,252 @@ describe("agent-runner master tool allowlist", () => {
       await expect(
         session.agent.beforeToolCall?.({ toolCall: { name: "steer_subagent" } }),
       ).resolves.not.toMatchObject({ block: true });
+    });
+
+    it("keeps StructuredOutput reachable with no tools: allowlist", async () => {
+      // The gate that would have silently killed this feature: `inScope` seeds
+      // `keep` from the built-in list, and a customTool is in neither that nor
+      // the extension registry — so without the re-admit it is narrowed out of
+      // the active set every turn and blocked at call time.
+      vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
+      vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: true }));
+      vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+      withExtensions({ "/ext/ok.ts": ["ok_ext"] });
+      const { session } = createSession("OK");
+      createAgentSession.mockResolvedValue({ session });
+
+      await runAgent(ctx, "Explore", "go", { pi, structuredOutput: STRUCTURED });
+
+      expect(customToolNames()).toContain("StructuredOutput");
+      await expect(
+        session.agent.beforeToolCall?.({ toolCall: { name: "StructuredOutput" } }),
+      ).resolves.not.toMatchObject({ block: true });
+    });
+
+    it("keeps StructuredOutput in the static allowlist when extensions are off", async () => {
+      // The other branch: `sessionTools` becomes a hard allowlist and pi drops
+      // any name missing from it out of the registry permanently.
+      vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: false }));
+      vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: false }));
+      vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+      const { session } = createSession("OK");
+      createAgentSession.mockResolvedValue({ session });
+
+      await runAgent(ctx, "Explore", "go", { pi, structuredOutput: STRUCTURED });
+
+      expect(lastToolsPassed()).toContain("StructuredOutput");
+      expect(customToolNames()).toContain("StructuredOutput");
+    });
+
+    it("does not let disallowed_tools remove StructuredOutput", async () => {
+      // A schema was asked for by the caller, not by the agent definition.
+      // Letting frontmatter take the tool away would make the request
+      // unsatisfiable rather than merely restricted — unlike a nested
+      // delegation tool, which is an opt-in the same frontmatter may retract.
+      vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
+      vi.mocked(getAgentConfig).mockReturnValueOnce(
+        makeAgentConfig({ extensions: true, disallowedTools: ["StructuredOutput"] }),
+      );
+      vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+      withExtensions({ "/ext/ok.ts": ["ok_ext"] });
+      const { session } = createSession("OK");
+      createAgentSession.mockResolvedValue({ session });
+
+      await runAgent(ctx, "Explore", "go", { pi, structuredOutput: STRUCTURED });
+
+      await expect(
+        session.agent.beforeToolCall?.({ toolCall: { name: "StructuredOutput" } }),
+      ).resolves.not.toMatchObject({ block: true });
+    });
+
+    it("denies ask_parent but keeps StructuredOutput when both are injected, under extensions", async () => {
+      // The merged readmit set carries the child→parent question tool and the
+      // schema tool together. `disallowed_tools` answers to the opt-in question
+      // name, not to a schema the caller asked for — verified with both
+      // injected at once, where one shared re-admission could otherwise leak
+      // or drop either kind.
+      vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
+      vi.mocked(getAgentConfig).mockReturnValueOnce(
+        makeAgentConfig({ extensions: true, disallowedTools: ["ask_parent"] }),
+      );
+      vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+      withExtensions({ "/ext/ok.ts": ["ok_ext"] });
+      const { session } = createSession("OK");
+      createAgentSession.mockResolvedValue({ session });
+
+      await runAgent(ctx, "Explore", "go", {
+        pi,
+        agentId: "child-1",
+        nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1 },
+        structuredOutput: STRUCTURED,
+      });
+
+      // ask_parent was injected but frontmatter took it back — denied at the
+      // registry gate and gone from the active set.
+      expect(createAgentSession.mock.calls[0][0].excludeTools ?? []).toContain("ask_parent");
+      const active = lastToolsPassed();
+      expect(active).not.toContain("ask_parent");
+      // StructuredOutput exists for the schema the CALLER asked for — the
+      // denylist must not take it away alongside.
+      expect(active).toContain("StructuredOutput");
+      await expect(
+        session.agent.beforeToolCall?.({ toolCall: { name: "StructuredOutput" } }),
+      ).resolves.not.toMatchObject({ block: true });
+    });
+
+    it("denies ask_parent but keeps StructuredOutput when both are injected, static allowlist", async () => {
+      // Same pair, other gate: `sessionTools` is a hard allowlist, so the only
+      // way a denied ask_parent can vanish while the schema tool survives is
+      // the disallowed-filtered re-admission.
+      vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: false }));
+      vi.mocked(getAgentConfig).mockReturnValueOnce(
+        makeAgentConfig({ extensions: false, disallowedTools: ["ask_parent"] }),
+      );
+      vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+      const { session } = createSession("OK");
+      createAgentSession.mockResolvedValue({ session });
+
+      await runAgent(ctx, "Explore", "go", {
+        pi,
+        agentId: "child-1",
+        nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1 },
+        structuredOutput: STRUCTURED,
+      });
+
+      // Injected as a customTool, yet unavailable: the disallowed name was
+      // filtered out of the allowlist — not merely never injected.
+      expect(customToolNames()).toContain("ask_parent");
+      const tools = lastToolsPassed();
+      expect(tools).not.toContain("ask_parent");
+      expect(tools).toContain("StructuredOutput");
+    });
+
+    it("injects nothing when no schema was asked for", async () => {
+      vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
+      vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: true }));
+      vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+      withExtensions({ "/ext/ok.ts": ["ok_ext"] });
+      const { session } = createSession("OK");
+      createAgentSession.mockResolvedValue({ session });
+
+      await runAgent(ctx, "Explore", "go", { pi });
+
+      expect(customToolNames()).not.toContain("StructuredOutput");
+      await expect(
+        session.agent.beforeToolCall?.({ toolCall: { name: "StructuredOutput" } }),
+      ).resolves.toMatchObject({ block: true });
+    });
+
+    it("returns the captured payload and does not retry when the child complies", async () => {
+      vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
+      vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: true }));
+      vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+      withExtensions({ "/ext/ok.ts": ["ok_ext"] });
+      const { session } = createSession("prose nobody asked for");
+      createAgentSession.mockResolvedValue({ session });
+
+      const answered = { done: false };
+      session.prompt.mockImplementation(async () => {
+        if (!answered.done) {
+          answered.done = true;
+          const tool = customTool("StructuredOutput");
+          await tool.execute("tc-1", { answer: "42" });
+        }
+      });
+
+      const result = await runAgent(ctx, "Explore", "go", { pi, structuredOutput: STRUCTURED });
+
+      expect(result.structuredJson).toBe(JSON.stringify({ answer: "42" }));
+      expect(result.failure).toBeUndefined();
+      expect(result.structuredRetried).toBeUndefined();
+      // One prompt: the child answered, so there is nothing to ask again.
+      expect(session.prompt).toHaveBeenCalledTimes(1);
+    });
+
+    it("prompts once more when the child answered in prose, and fails if it still does", async () => {
+      vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
+      vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: true }));
+      vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+      withExtensions({ "/ext/ok.ts": ["ok_ext"] });
+      const { session } = createSession("still just prose");
+      createAgentSession.mockResolvedValue({ session });
+
+      const result = await runAgent(ctx, "Explore", "go", { pi, structuredOutput: STRUCTURED });
+
+      expect(session.prompt).toHaveBeenCalledTimes(2);
+      expect(String(session.prompt.mock.calls[1][0])).toMatch(/Call StructuredOutput now/);
+      expect(result.structuredJson).toBeUndefined();
+      expect(result.structuredRetried).toBe(true);
+      // Reported as a failure, not as a completion holding prose the caller
+      // never asked for.
+      expect(result.failure).toMatch(/StructuredOutput/);
+    });
+
+    it("recovers when the second prompt produces the payload", async () => {
+      vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
+      vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: true }));
+      vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+      withExtensions({ "/ext/ok.ts": ["ok_ext"] });
+      const { session } = createSession("prose");
+      createAgentSession.mockResolvedValue({ session });
+
+      let calls = 0;
+      session.prompt.mockImplementation(async () => {
+        calls++;
+        if (calls === 2) await customTool("StructuredOutput").execute("tc-2", { answer: "late" });
+      });
+
+      const result = await runAgent(ctx, "Explore", "go", { pi, structuredOutput: STRUCTURED });
+
+      expect(result.structuredJson).toBe(JSON.stringify({ answer: "late" }));
+      expect(result.structuredRetried).toBe(true);
+      expect(result.failure).toBeUndefined();
+    });
+
+    it("carries the validation error into the retry prompt", async () => {
+      vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
+      vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: true }));
+      vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+      withExtensions({ "/ext/ok.ts": ["ok_ext"] });
+      const { session } = createSession("prose");
+      createAgentSession.mockResolvedValue({ session });
+
+      let calls = 0;
+      session.prompt.mockImplementation(async () => {
+        calls++;
+        // Wrong shape, so the tool rejects it and records why.
+        if (calls === 1) await customTool("StructuredOutput").execute("tc-3", { wrong: 1 });
+      });
+
+      await runAgent(ctx, "Explore", "go", { pi, structuredOutput: STRUCTURED });
+
+      const retry = String(session.prompt.mock.calls[1][0]);
+      // "you got the shape wrong" and "you never answered" need different
+      // corrections; telling it the wrong one sends it hunting.
+      expect(retry).toMatch(/did not match the required schema/);
+      expect(retry).toContain("answer");
+    });
+
+    it("does not retry a child that was aborted", async () => {
+      vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: true }));
+      vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ extensions: true }));
+      vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
+      withExtensions({ "/ext/ok.ts": ["ok_ext"] });
+      const { session } = createSession("prose");
+      createAgentSession.mockResolvedValue({ session });
+
+      const controller = new AbortController();
+      session.prompt.mockImplementation(async () => { controller.abort(); });
+
+      await runAgent(ctx, "Explore", "go", {
+        pi,
+        structuredOutput: STRUCTURED,
+        signal: controller.signal,
+      });
+
+      // Re-prompting something the user just stopped would be the opposite of
+      // what they asked for.
+      expect(session.prompt).toHaveBeenCalledTimes(1);
     });
 
     it("a partial denial does not take down the whole nested set", async () => {

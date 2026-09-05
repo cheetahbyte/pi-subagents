@@ -116,12 +116,25 @@ function capResult(text: string): { text: string; elided: number } {
   if (text.length <= RESULT_MAX_CHARS) return { text, elided: 0 };
   return {
     text: text.slice(0, RESULT_MAX_CHARS),
-    elided: text.slice(RESULT_MAX_CHARS).split("\n").length,
+    elided: text.length - RESULT_MAX_CHARS,
   };
 }
 
+/**
+ * `999` · `1.5k` · `8.4M` — a magnitude cue, not an exact count, past 1000.
+ *
+ * The bracket is chosen against the *rounded* value, so 999,999 reads `1M`
+ * rather than the `1000.0k` a naive `< 1e6` test produces.
+ */
+function humanCount(n: number): string {
+  if (n < 1_000) return `${n}`;
+  const thousands = n < 999_950;
+  const value = thousands ? n / 1_000 : n / 1_000_000;
+  return `${value.toFixed(1).replace(/\.0$/, "")}${thousands ? "k" : "M"}`;
+}
+
 function truncationNote(elided: number): string {
-  return `... (truncated, ${elided} more line${elided === 1 ? "" : "s"})`;
+  return `... (truncated, ${humanCount(elided)} more character${elided === 1 ? "" : "s"})`;
 }
 
 export class ConversationViewer implements Component {
@@ -391,7 +404,7 @@ export class ConversationViewer implements Component {
   }
 
   /** Render `text` as Markdown, reusing this message's component instance. */
-  private markdownLines(msg: object, text: string, width: number, dim: boolean): string[] {
+  private markdownLines(msg: AgentSession["messages"][number], text: string, width: number, dim: boolean): string[] {
     let entry = this.markdownCache.get(msg);
     if (!entry) {
       entry = {
@@ -411,10 +424,13 @@ export class ConversationViewer implements Component {
       };
       this.markdownCache.set(msg, entry);
     } else if (entry.text !== text) {
-      // Streaming: the message object is stable, its text grows.
+      // Streaming: the message object is stable, its text grows. A failed
+      // prefix remains unsafe after append-only deltas, so retry only when the
+      // content was replaced or truncated.
+      const shouldRetry = !text.startsWith(entry.text);
       entry.md.setText(text);
       entry.text = text;
-      entry.failed = false;
+      if (shouldRetry) entry.failed = false;
     }
     if (entry.failed) return this.rawLines(text, width, dim);
 

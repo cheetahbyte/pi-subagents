@@ -10,6 +10,8 @@ import type { AgentRecord } from "../src/types.js";
 let wrapOverride: ((text: string, width: number) => string[]) | null = null;
 /** Bumped per `new Markdown(...)`, so a test can assert the per-message cache holds. */
 let markdownConstructions = 0;
+/** Bumped per Markdown render attempt, including failed ones. */
+let markdownRenderCalls = 0;
 /** Forces the Markdown component to throw, for the viewer's fallback path. */
 let markdownThrows = false;
 
@@ -23,6 +25,7 @@ vi.mock("@earendil-works/pi-tui", async (importOriginal) => {
         super(...args);
       }
       render(width: number): string[] {
+        markdownRenderCalls++;
         // Real trigger is ~54 nested blockquotes overflowing pi-tui's recursive
         // renderer. Forced rather than reproduced: a real overflow costs ~2.4s
         // and its depth depends on the platform's stack limit, so reproducing it
@@ -92,6 +95,7 @@ function assertAllLinesFit(lines: string[], width: number) {
 beforeEach(() => {
   wrapOverride = null;
   markdownConstructions = 0;
+  markdownRenderCalls = 0;
   markdownThrows = false;
 });
 
@@ -500,7 +504,7 @@ describe("ConversationViewer", () => {
 
       expect(out).toContain("line 100");                       // far past the old 500-char cut
       expect(out).not.toContain("line 2999");                  // but still bounded
-      expect(out).toMatch(/\.\.\. \(truncated, \d+ more lines\)/);
+      expect(out).toMatch(/\.\.\. \(truncated, [\d.]+[kM]? more characters\)/);
     });
 
     it("puts the truncation notice outside the code fence it cut into", () => {
@@ -511,33 +515,76 @@ describe("ConversationViewer", () => {
 
       // Appended into the content it lands inside the unterminated fence, where
       // it picks up the code-block indent and reads as a line of the tool's source.
-      expect(note).toMatch(/^\.\.\. \(truncated, \d+ more lines\)$/);
+      expect(note).toMatch(/^\.\.\. \(truncated, [\d.]+[kM]? more characters\)$/);
     });
 
-    it("falls back to literal wrapping when the Markdown parser throws", () => {
+    it("reports the exact omitted character count", () => {
+      // UTF-16 code units, so the astral character here counts as two.
+      const text = `${"x".repeat(RESULT_MAX_CHARS)}😀x`;
+      const viewer = viewerFor(result(text));
+      const content = ((viewer as any).buildContentLines(76) as string[]).map(strip);
+
+      expect(content).toContain("... (truncated, 3 more characters)");
+    });
+
+    it("abbreviates a large omitted count so the notice fits a narrow frame", () => {
+      // The notice goes through truncateToWidth at innerW (width - 4). An exact
+      // count runs to seven digits on a multi-megabyte result and pushes the
+      // notice past 46, where the unit is cut off and only a number survives.
+      const text = `${"x".repeat(RESULT_MAX_CHARS)}${"y".repeat(1_100_000)}`;
+      const note = viewerFor(result(text)).render(50).map(strip).find(l => l.includes("truncated,"));
+
+      expect(note).toContain("1.1M more characters)");
+    });
+
+    it("rounds into the M bracket rather than reporting 1000k", () => {
+      // 999,999 / 1000 rounds to 1000.0 — the bracket has to be picked against
+      // the rounded value, not the raw one.
+      const text = `${"x".repeat(RESULT_MAX_CHARS)}${"y".repeat(999_999)}`;
+      const note = strip(viewerFor(result(text)).render(80).join("\n")).split("\n").find(l => l.includes("truncated,"));
+
+      expect(note).toContain("1M more characters");
+    });
+
+    it("falls back to literal wrapping once for an unsafe streaming prefix", () => {
       // render() is on the TUI's critical path, so a parser throw must degrade
       // rather than take the overlay down with it.
-      const viewer = viewerFor(result("# heading"), "all");
+      const messages = result("# heading");
+      const viewer = viewerFor(messages, "all");
       markdownThrows = true;
 
       expect(() => viewer.render(80)).not.toThrow();
       expect(strip(viewer.render(80).join("\n"))).toContain("# heading");
 
-      // And the failure is remembered — otherwise the throw repeats on every
-      // render and every scroll key. Still literal once the parser would work.
+      // An append-only delta keeps the unsafe prefix, so it must stay literal
+      // without retrying the recursive parser on every streamed update.
+      messages[0].content[0].text += "\nmore";
+      expect(strip(viewer.render(80).join("\n"))).toContain("more");
+      expect(markdownRenderCalls).toBe(1);
+
       markdownThrows = false;
       expect(strip(viewer.render(80).join("\n"))).toContain("# heading");
+      expect(markdownRenderCalls).toBe(1);
+
+      // Replacing the failed content can remove the unsafe prefix, so it gets
+      // one fresh Markdown attempt instead of staying literal forever.
+      messages[0].content[0].text = "## safe";
+      const replaced = strip(viewer.render(80).join("\n"));
+      expect(markdownRenderCalls).toBe(2);
+      expect(replaced).toContain("safe");
+      expect(replaced).not.toContain("## safe");
     });
 
     it("tracks a tool result that keeps growing past the cap", () => {
       // The live case: the capped prefix never changes, so the parse is reused,
-      // but the count of what is being held back has to keep moving.
+      // but the character count being held back has to keep moving.
       const msg = { role: "toolResult", toolUseId: "t", content: [{ type: "text", text: `${"row\n".repeat(4500)}` }] };
       const viewer = viewerFor([msg]);
-      const elided = () => Number(
-        strip(((viewer as any).buildContentLines(76) as string[]).join("\n"))
-          .match(/truncated, (\d+) more/)?.[1],
-      );
+      const elided = () => {
+        const m = strip(((viewer as any).buildContentLines(76) as string[]).join("\n"))
+          .match(/truncated, ([\d.]+)([kM]?) more/);
+        return Number(m?.[1]) * (m?.[2] === "M" ? 1e6 : m?.[2] === "k" ? 1e3 : 1);
+      };
 
       const before = elided();
       msg.content[0].text += "row\n".repeat(1000);
@@ -564,7 +611,7 @@ describe("ConversationViewer", () => {
       const messages = [{ role: "bashExecution", command: "yes", output: "y\n".repeat(20000) }];
       const out = strip(viewerFor(messages).render(80).join("\n"));
 
-      expect(out).toMatch(/\.\.\. \(truncated, \d+ more lines\)/);
+      expect(out).toMatch(/\.\.\. \(truncated, [\d.]+[kM]? more characters\)/);
     });
 
     it("keeps tool results dim even when rendering them as Markdown", () => {

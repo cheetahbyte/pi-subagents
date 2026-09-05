@@ -2,9 +2,16 @@ import { Editor, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
 import { registerAgents } from "../src/agent-types.js";
-import type { AgentConfig, AgentRecord } from "../src/types.js";
+import type { AgentConfig, AgentRecord, ViewerMarkdownMode } from "../src/types.js";
 import { type AgentActivity, getDisplayName } from "../src/ui/agent-widget.js";
-import { FleetList, type FleetUICtx, formatFleetElapsed, formatFleetTokens } from "../src/ui/fleet-list.js";
+import {
+  FleetList,
+  type FleetUICtx,
+  type FleetWorkflow,
+  formatFleetElapsed,
+  formatFleetTokens,
+} from "../src/ui/fleet-list.js";
+import { transcriptOverride } from "../src/ui/transcript-override.js";
 
 // ---- Key sequences (see node_modules/@earendil-works/pi-tui/dist/keys.js) ----
 const DOWN = "\x1b[B";
@@ -59,6 +66,19 @@ function makeRecord(over: Partial<AgentRecord> = {}): AgentRecord {
   } as AgentRecord;
 }
 
+function makeWorkflow(over: Partial<FleetWorkflow> = {}): FleetWorkflow {
+  return {
+    id: "wf_abc123",
+    name: "audit-src",
+    status: "running",
+    doneCount: 1,
+    totalCount: 3,
+    startedAt: Date.now() - 32_000,
+    tokens: 26_400,
+    ...over,
+  };
+}
+
 /** Fake manager exposing only what FleetList touches. */
 function fakeManager(agents: AgentRecord[]): AgentManager {
   return {
@@ -80,6 +100,12 @@ interface Harness {
   fleet: FleetList;
   ui: FleetUICtx;
   manager: AgentManager;
+  /** Replace the workflow runs the picker sees. */
+  setWorkflows: (list: FleetWorkflow[]) => void;
+  /** Ids the picker asked the extension to open, in order. */
+  openedWorkflows: () => string[];
+  /** Settle the workflow inspector the picker last opened; flushes the close microtask. */
+  closeWorkflowDialog: () => Promise<void>;
   /** Feed a key to the registered input handler; returns the consume result. */
   press: (data: string) => { consume?: boolean } | undefined;
   setEditorText: (t: string) => void;
@@ -95,7 +121,13 @@ interface Harness {
   tui: { requestRender(): void; focusedComponent?: unknown; terminal: { columns: number; rows: number } };
 }
 
-function harness(agents: AgentRecord[]): Harness {
+function harness(
+  agents: AgentRecord[],
+  opts: {
+    viewerMarkdown?: () => ViewerMarkdownMode;
+    onViewerMarkdown?: (mode: ViewerMarkdownMode) => void;
+  } = {},
+): Harness {
   let inputHandler: ((data: string) => { consume?: boolean } | undefined) | undefined;
   let editorText = "";
   const overlays: Overlay[] = [];
@@ -104,6 +136,7 @@ function harness(agents: AgentRecord[]): Harness {
   const ui: FleetUICtx = {
     onTerminalInput: (h) => { inputHandler = h; return () => { inputHandler = undefined; }; },
     getEditorText: () => editorText,
+    setEditorText: (t) => { editorText = t; },
     notify: () => {},
     custom: ((factory: any) => {
       return new Promise<any>((resolve) => {
@@ -116,13 +149,25 @@ function harness(agents: AgentRecord[]): Harness {
   };
 
   const manager = fakeManager(agents);
-  const fleet = new FleetList(manager, new Map());
+  const fleet = new FleetList(manager, new Map(), undefined, opts.viewerMarkdown, opts.onViewerMarkdown);
   fleet.setUICtx(ui);
+  let workflows: FleetWorkflow[] = [];
+  const openedWorkflows: string[] = [];
+  let closeWorkflowDialog: (() => void) | undefined;
+  fleet.setWorkflowSource(() => workflows, id => {
+    openedWorkflows.push(id);
+    // The real opener hands back the dialog's promise, so the picker can put
+    // the cursor back when it closes. Held open here until a test resolves it.
+    return new Promise<void>(resolve => { closeWorkflowDialog = () => resolve(); });
+  });
 
   return {
     fleet,
     ui,
     manager,
+    setWorkflows: (list: FleetWorkflow[]) => { workflows = list; },
+    openedWorkflows: () => openedWorkflows,
+    closeWorkflowDialog: async () => { closeWorkflowDialog?.(); await Promise.resolve(); },
     press: (data) => inputHandler?.(data),
     setEditorText: (t) => { editorText = t; },
     overlay: () => overlays[overlays.length - 1],
@@ -567,6 +612,25 @@ describe("FleetList picker ↔ viewer flow", () => {
     expect(h.manager.abort).toHaveBeenCalledWith("live");
   });
 
+  it("hands the viewer the user's markdown setting, and persists a mode chosen with m", async () => {
+    const persisted: ViewerMarkdownMode[] = [];
+    const h = harness([makeRecord({ id: "live", description: "the one" })], {
+      viewerMarkdown: () => "all",
+      onViewerMarkdown: (mode) => persisted.push(mode),
+    });
+    openPicker(h);
+    h.overlayKey(DOWN);  // → the agent
+    h.overlayKey(ENTER); // open the conversation viewer
+    await flush();
+
+    h.overlayKey("m");
+
+    // "all" → "off" proves the cycle started from the *setting*; the viewer's own
+    // fallback would have started at "assistant" and landed on "all". A recorded
+    // value at all proves the persist hook is wired, as it is from /agents.
+    expect(persisted).toEqual(["off"]);
+  });
+
   it("does NOT auto-close when the viewed agent finishes (final output stays readable)", async () => {
     const agents = [makeRecord({ id: "live", description: "the one" })];
     const h = harness(agents);
@@ -680,5 +744,279 @@ describe("FleetList cost display", () => {
     } as unknown as AgentActivity]]);
 
     expect(row(true, 0.0042, tracked)).toBe(row(true, 0.0042));
+  });
+});
+
+/* ------------------------------------------------------------------------- *
+ * Workflow runs
+ * ------------------------------------------------------------------------- */
+
+describe("FleetList workflow rows", () => {
+  it("renders identically with no workflow source and an empty one", () => {
+    // The contract: a session without workflows behaves exactly as it did
+    // before they existed. Asserted as an equality rather than an absence, so
+    // a future change to the roster cannot quietly alter the agents-only path.
+    const withNone = harness([makeRecord({ id: "a1", description: "one" })]);
+    openPicker(withNone);
+    const before = withNone.render().join("\n");
+    expect(before).not.toContain("workflow");
+
+    const withEmpty = harness([makeRecord({ id: "a1", description: "one" })]);
+    withEmpty.setWorkflows([]);
+    openPicker(withEmpty);
+    expect(withEmpty.render().join("\n")).toBe(before);
+  });
+
+  it("navigates agents exactly as before when no run is present", async () => {
+    const h = harness([
+      makeRecord({ id: "a1", description: "one" }),
+      makeRecord({ id: "a2", description: "two" }),
+    ]);
+    h.setWorkflows([]);
+
+    openPicker(h);
+    h.overlayKey(DOWN); // → a1
+    h.overlayKey(DOWN); // → a2
+    h.overlayKey(ENTER);
+    await flush();
+
+    // The second agent, not a run and not `main`.
+    expect(h.openedWorkflows()).toEqual([]);
+    expect(h.overlayCount()).toBe(2); // the conversation viewer, not an inspector
+  });
+
+  it("lists a run above the agent groups, with its counts and stats", () => {
+    const h = harness([makeRecord({ id: "a1", description: "one" })]);
+    h.setWorkflows([makeWorkflow()]);
+    openPicker(h);
+
+    const rows = h.render().map(plain).filter(row => row.trim() !== "");
+    const run = rows.find(row => row.includes("audit-src"))!;
+    const agent = rows.findIndex(row => row.includes("one"));
+    expect(run).toContain("workflow");
+    expect(run).toContain("1/3 agents");
+    expect(run).toContain("26.4k tokens");
+    // Runs sit in their own section above the agent groups: the container comes first.
+    expect(rows.findIndex(row => row.includes("Workflows (1)"))).toBeLessThan(agent);
+    expect(rows.findIndex(row => row.includes("audit-src"))).toBeLessThan(agent);
+  });
+
+  it("agrees with itself about a single-agent run", () => {
+    const h = harness([]);
+    h.setWorkflows([makeWorkflow({ doneCount: 1, totalCount: 1 })]);
+    openPicker(h);
+    expect(h.render().map(plain).join("\n")).toContain("1/1 agent ");
+  });
+
+  it("hides the run's own agents — the run is the row that represents them", () => {
+    // A 40-agent fan-out would otherwise push every other agent off the picker,
+    // and each child is already reachable inside the workflow dialog.
+    const h = harness([
+      makeRecord({ id: "a1", description: "mine" }),
+      makeRecord({ id: "w1", description: "the workflow's", workflowId: "wf_abc123" }),
+    ]);
+    h.setWorkflows([makeWorkflow()]);
+
+    openPicker(h);
+    const rendered = h.render().map(plain).join("\n");
+    expect(rendered).toContain("mine");
+    expect(rendered).toContain("audit-src");
+    expect(rendered).not.toContain("the workflow's");
+  });
+
+  it("opens a run from the picker even when it is the only row besides 'main'", async () => {
+    // The run is the row the user opens to see what its children did — a picker
+    // with nothing but the run still has somewhere to go.
+    const h = harness([]);
+    h.setWorkflows([makeWorkflow({ id: "wf_only" })]);
+
+    openPicker(h);
+    h.overlayKey(DOWN); // → the run
+    h.overlayKey(ENTER);
+    await flush(); // the picker's close handoff to the inspector
+
+    expect(h.openedWorkflows()).toEqual(["wf_only"]);
+  });
+
+  it("still does nothing at an empty prompt with no rows at all", () => {
+    const h = harness([]);
+    expect(h.press(LEFT)?.consume).toBe(true); // main alone is still a row
+  });
+
+  it("opens the selected run rather than a conversation viewer", async () => {
+    const h = harness([makeRecord({ id: "a1", description: "one" })]);
+    h.setWorkflows([makeWorkflow({ id: "wf_pick" })]);
+
+    openPicker(h);
+    h.overlayKey(DOWN); // → the run
+    h.overlayKey(ENTER);
+    await flush();
+
+    expect(h.openedWorkflows()).toEqual(["wf_pick"]);
+    // The workflow dialog owns its own overlay; the picker must not open one.
+    expect(h.overlayCount()).toBe(1); // picker closed, no viewer on top
+    expect(h.overlay()!.closed).toBe(true);
+  });
+
+  const NOW = Date.now();
+
+  /** Open the second of two runs, leaving the inspector up. */
+  async function openSecondRun() {
+    const h = harness([makeRecord({ id: "a1", description: "one" })]);
+    h.setWorkflows([
+      makeWorkflow({ id: "wf_a", name: "audit-src", startedAt: NOW - 30_000 }),
+      makeWorkflow({ id: "wf_b", name: "review-changes", startedAt: NOW - 20_000 }),
+    ]);
+    openPicker(h);
+    h.overlayKey(DOWN);
+    h.overlayKey(DOWN);
+    expect(h.openedWorkflows()).toEqual([]);
+    h.overlayKey(ENTER);
+    await flush(); // the picker's close handoff to the inspector
+    expect(h.openedWorkflows()).toEqual(["wf_b"]);
+    return h;
+  }
+
+  it("keeps its hands off the keyboard while the inspector is up", async () => {
+    // The picker only stays out of the inspector's keys when it knows one is
+    // open. Focus alone is not enough: `editorHasFocus` reads unknowable focus
+    // as the editor's, which is exactly the state a fresh overlay leaves
+    // behind, and the picker would then eat the keys the dialog is waiting for.
+    const h = await openSecondRun();
+
+    expect(h.press(DOWN)?.consume, "the dialog's keys are not the picker's").toBeFalsy();
+    expect(h.press(ENTER)?.consume).toBeFalsy();
+    // And nothing moved behind it — one ENTER opened one run.
+    expect(h.openedWorkflows()).toEqual(["wf_b"]);
+  });
+
+  it("comes back to the same run when the inspector closes", async () => {
+    // Runs settle and start while the dialog is open, so the row the reader
+    // came from is not reliably where it was. The agent path re-finds its row
+    // by id for the same reason; a run has to be findable the same way.
+    const h = await openSecondRun();
+
+    h.setWorkflows([
+      makeWorkflow({ id: "wf_a", name: "audit-src", startedAt: NOW - 30_000 }),
+      makeWorkflow({ id: "wf_new", name: "started-meanwhile", startedAt: NOW - 25_000 }),
+      makeWorkflow({ id: "wf_b", name: "review-changes", startedAt: NOW - 20_000 }),
+    ]);
+    await h.closeWorkflowDialog();
+
+    expect(h.render().find(l => l.includes("review-changes"))).toContain("●");
+    expect(h.render().find(l => l.includes("started-meanwhile"))).not.toContain("●");
+  });
+
+  it("drops the native child transcript before opening a workflow inspector, then reselects the run", async () => {
+    // View an agent through the native transcript (no overlay), switch to the
+    // picker, and open a run from it: the child's transcript must be dropped
+    // before the inspector opens, and its id must not survive the trip.
+    const clear = vi.spyOn(transcriptOverride, "clear");
+    vi.spyOn(transcriptOverride, "show").mockReturnValue(true);
+    try {
+      const h = harness([makeRecord({ id: "a1", description: "one" })]);
+      h.setWorkflows([makeWorkflow({ id: "wf_x", name: "audit-src" })]);
+      openPicker(h);
+      h.overlayKey(DOWN);  // → the run
+      h.overlayKey(DOWN);  // → the agent
+      h.overlayKey(ENTER); // native transcript: show() succeeded, no overlay
+      await flush();
+      expect(h.overlayCount()).toBe(1); // the picker only — no viewer overlay
+      expect(h.press(ENTER)).toEqual({ consume: true }); // still viewing the agent
+
+      // ← from the native transcript reopens the picker…
+      expect(h.press(LEFT)).toEqual({ consume: true });
+      expect(h.overlayCount()).toBe(2);
+      h.overlayKey(UP);    // …back up to the run…
+      h.overlayKey(ENTER); // …and into its inspector.
+      await flush();
+      expect(h.openedWorkflows()).toEqual(["wf_x"]);
+      // The child's native transcript was dropped the moment the inspector opened.
+      expect(clear).toHaveBeenCalled();
+      // Input belongs to the inspector now — none of it reaches the prompt.
+      expect(h.press(ENTER)).toBeUndefined();
+      expect(h.press(DOWN)).toBeUndefined();
+
+      // The roster reorders while the inspector is up; closing still lands on
+      // the run we came from, found by id.
+      h.setWorkflows([
+        makeWorkflow({ id: "wf_x", name: "audit-src", startedAt: Date.now() - 32_000 }),
+        makeWorkflow({ id: "wf_new", name: "started-meanwhile", startedAt: Date.now() - 25_000 }),
+      ]);
+      await h.closeWorkflowDialog();
+      expect(h.render().find(l => l.includes("audit-src"))).toContain("●");
+      expect(h.render().find(l => l.includes("started-meanwhile"))).not.toContain("●");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("does not reopen the picker when the inspector settles after disable", async () => {
+    const h = harness([makeRecord()]);
+    h.setWorkflows([makeWorkflow({ id: "wf_x" })]);
+    openPicker(h);
+    h.overlayKey(DOWN);  // → the run
+    h.overlayKey(ENTER); // open the inspector
+    await flush();
+    expect(h.openedWorkflows()).toEqual(["wf_x"]);
+
+    h.fleet.setEnabled(false);
+    await h.closeWorkflowDialog(); // the inspector settles while disabled
+    expect(h.overlayCount()).toBe(1); // nothing reopened
+
+    h.fleet.setEnabled(true);
+    expect(h.press(LEFT)).toEqual({ consume: true }); // the picker works again
+    expect(h.overlayCount()).toBe(2);
+  });
+
+  it("does not reopen the picker when the inspector settles after dispose", async () => {
+    const h = harness([makeRecord()]);
+    h.setWorkflows([makeWorkflow({ id: "wf_x" })]);
+    openPicker(h);
+    h.overlayKey(DOWN);  // → the run
+    h.overlayKey(ENTER); // open the inspector
+    await flush();
+
+    h.fleet.dispose();
+    await h.closeWorkflowDialog(); // the inspector settles after the list is gone
+    expect(h.overlayCount()).toBe(1); // nothing reopened on top
+    expect(h.press(LEFT)).toBeUndefined(); // input handler unsubscribed
+  });
+
+  it("still opens an agent's viewer when the selection is past the runs", async () => {
+    const h = harness([makeRecord({ id: "a1", description: "one" })]);
+    h.setWorkflows([makeWorkflow()]);
+
+    openPicker(h);
+    h.overlayKey(DOWN); // → the run
+    h.overlayKey(DOWN); // → the agent
+    h.overlayKey(ENTER);
+    await flush();
+
+    expect(h.openedWorkflows()).toEqual([]);
+    expect(h.overlayCount()).toBe(2); // the conversation viewer
+  });
+
+  it("drops a settled run once it stops lingering, and keeps a live one", () => {
+    const h = harness([]);
+    h.setWorkflows([
+      makeWorkflow({ id: "wf_old", name: "old", status: "completed", completedAt: Date.now() - 60 * 60_000 }),
+      makeWorkflow({ id: "wf_now", name: "now" }),
+    ]);
+
+    openPicker(h);
+    const rendered = h.render().map(plain).join("\n");
+    expect(rendered).toContain("now");
+    expect(rendered).not.toContain("old");
+  });
+
+  it("freezes a finished run's clock the way an agent's is frozen", () => {
+    const h = harness([]);
+    // Inside FINISHED_LINGER_MS, or the row would be gone before it could be read.
+    const completedAt = Date.now() - 1_000;
+    h.setWorkflows([makeWorkflow({ status: "completed", startedAt: completedAt - 12_000, completedAt })]);
+
+    openPicker(h);
+    expect(h.render().map(plain).join("\n")).toContain("12s");
   });
 });

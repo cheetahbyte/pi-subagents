@@ -66,7 +66,10 @@ describe("AgentWidget", () => {
     };
   }
 
-  function makeRecord(id: string, opts: { isBackground?: boolean; parentAgentId?: string } = {}) {
+  function makeRecord(
+    id: string,
+    opts: { isBackground?: boolean; parentAgentId?: string; workflowId?: string } = {},
+  ) {
     return {
       id,
       type: "general-purpose",
@@ -79,6 +82,7 @@ describe("AgentWidget", () => {
       invocation: { modelName: "sonnet 4.6", modelId: "anthropic/claude-sonnet-4-6", thinking: "high" },
       isBackground: opts.isBackground,
       parentAgentId: opts.parentAgentId,
+      workflowId: opts.workflowId,
     };
   }
 
@@ -103,11 +107,12 @@ describe("AgentWidget", () => {
       .join("\n");
   }
 
-  it("publishes status updates for pi-footer event widgets", () => {
+  it("publishes top-level status updates without workflow children to pi-footer", () => {
     const agent = makeRecord("background", { isBackground: true });
+    const workflowChild = makeRecord("workflow-child", { isBackground: true, workflowId: "wf_abc" });
     const published: Array<string | null> = [];
     const widget = new AgentWidget(
-      { listAgents: () => [agent] } as any,
+      { listAgents: () => [agent, workflowChild] } as any,
       new Map([[agent.id, makeActivity()]]),
       () => "background",
       () => false,
@@ -136,6 +141,16 @@ describe("AgentWidget", () => {
     };
     expect(renderLines(manager, "nested", () => "all")).toBe("");
     expect(renderLines(manager, "nested", () => "background")).toBe("");
+  });
+
+  it("hides a workflow's agents in every coordinator widget mode", () => {
+    // They belong to the run, which reports for them through its own card and
+    // its own row in the fleet list.
+    const manager = {
+      listAgents: () => [makeRecord("child", { isBackground: true, workflowId: "wf_abc" })],
+    };
+    expect(renderLines(manager, "child", () => "all")).toBe("");
+    expect(renderLines(manager, "child", () => "background")).toBe("");
   });
 
   it("excludes foreground agents in 'background' mode", () => {
