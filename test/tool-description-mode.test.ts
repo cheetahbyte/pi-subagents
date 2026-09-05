@@ -53,7 +53,7 @@ describe("toolDescriptionMode", () => {
   function setup(settings?: Record<string, unknown>, beforeInstantiate?: () => void) {
     tmpDir = mkdtempSync(join(tmpdir(), "pi-tooldesc-"));
     // Isolate global settings (getAgentDir / ~/.pi) so the dev's real
-    // subagents.json can't leak into the "default is full" assertion.
+    // subagents.json can't leak into the default-mode assertions.
     hermeticAgentDir = mkdtempSync(join(tmpdir(), "pi-tooldesc-agentdir-"));
     prevAgentDir = process.env.PI_CODING_AGENT_DIR;
     prevHome = process.env.HOME;
@@ -146,6 +146,27 @@ describe("toolDescriptionMode", () => {
     expect(desc).toContain("## Writing the prompt");
     // Full agent descriptions are embedded (a late Explore sentence survives).
     expect(desc).toContain("very thorough");
+  });
+
+  it("uses the compact workflow contract by default", () => {
+    const desc: string = setup().get("SubagentWorkflow").description;
+    expect(desc).toContain("Run a deterministic JavaScript workflow");
+    expect(desc).not.toContain("Quality patterns");
+    expect(desc.length).toBeLessThan(7_000); // includes the rendered agent roster
+  });
+
+  it("full mode restores the workflow recipes", () => {
+    const desc: string = setup({ toolDescriptionMode: "full" }).get("SubagentWorkflow").description;
+    expect(desc).toContain("Quality patterns");
+    expect(desc.length).toBeGreaterThan(20_000);
+  });
+
+  it("custom Agent mode keeps the workflow contract compact", () => {
+    const tools = setup({ toolDescriptionMode: "custom" }, () => {
+      writeFileSync(join(tmpDir, ".pi", "agent-tool-description.md"), "Custom Agent description");
+    });
+    expect(tools.get("Agent").description).toBe("Custom Agent description");
+    expect(tools.get("SubagentWorkflow").description).toContain("Run a deterministic JavaScript workflow");
   });
 
   it("compact keeps every load-bearing contract — fails when a behavior change forgets compact", () => {

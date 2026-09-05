@@ -72,7 +72,7 @@ import { elapsedMs } from "./workflow/progress.js";
 import { runWorkflow } from "./workflow/runtime.js";
 import { resolveWorkflowScript } from "./workflow/saved.js";
 import { completeWorkflowTask, createWorkflowTask, failWorkflowTask, formatWorkflowNotification, resolveResumeTarget, updateWorkflowProgressBatch, type WorkflowTask, workflowResultText, workflowRunId } from "./workflow/task.js";
-import { fullWorkflowToolDescription } from "./workflow/tool-description.js";
+import { compactWorkflowToolDescription, fullWorkflowToolDescription } from "./workflow/tool-description.js";
 import { isWorktreeIsolationEnabled, setWorktreeIsolationEnabled } from "./worktree.js";
 import { escapeXml } from "./xml.js";
 
@@ -1254,11 +1254,11 @@ export default function (pi: ExtensionAPI) {
     reloadCustomAgents(); // re-register with new setting
   }
 
-  // ---- Agent tool description mode ----
-  // "compact" (default) is a ~75% smaller description for small/local models
-  // (#91); "full" is the rich Claude Code-style description; "custom" reads a
-  // user-authored template. Read once at tool registration — flipping it
-  // applies on the next pi session.
+  // ---- Tool description mode ----
+  // "compact" (default) trims both Agent and SubagentWorkflow for small/local
+  // models (#91); "full" uses their rich Claude Code-style descriptions;
+  // "custom" replaces Agent only and keeps the workflow description compact.
+  // Read once at tool registration — flipping it applies next pi session.
   let toolDescriptionMode: ToolDescriptionMode = "compact";
   function getToolDescriptionMode(): ToolDescriptionMode { return toolDescriptionMode; }
   function setToolDescriptionMode(mode: ToolDescriptionMode): void { toolDescriptionMode = mode; }
@@ -2448,7 +2448,11 @@ Terse command-style prompts produce shallow, generic work.
   const workflowTool = defineTool({
     name: SUBAGENT_TOOL_NAMES.WORKFLOW,
     label: "SubagentWorkflow",
-    description: renderToolDescriptionTemplate(fullWorkflowToolDescription),
+    description: renderToolDescriptionTemplate(
+      getToolDescriptionMode() === "full"
+        ? fullWorkflowToolDescription
+        : compactWorkflowToolDescription,
+    ),
     promptSnippet: "Run a deterministic script that orchestrates many subagents",
     promptGuidelines: [
       "Use SubagentWorkflow when the number of agents depends on something discovered at runtime, when work flows through stages, or when findings should be independently verified. Use Agent for one delegated task or a handful you can name up front.",
@@ -3726,7 +3730,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
         {
           id: "toolDescriptionMode",
           label: "Tool description",
-          description: "Agent tool description sent to the LLM: compact (default, ~75% fewer tokens, for small/local models), full (rich), or custom (.pi/agent-tool-description.md with {{placeholders}})",
+          description: "Tool descriptions sent to the LLM: compact (default), full (rich Agent and workflow guides), or custom Agent description plus compact workflow guide",
           currentValue: getToolDescriptionMode(),
           values: ["full", "compact", "custom"],
         },

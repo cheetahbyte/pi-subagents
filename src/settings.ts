@@ -108,14 +108,13 @@ export interface SubagentsSettings {
    */
   disableDefaultAgents?: boolean;
   /**
-   * Which Agent tool description the LLM sees. "compact" (default) is a
-   * ~75% smaller version (one-line agent type list, terse usage notes) for
-   * small/local models where tool-spec tokens are expensive; "full" is the
-   * rich Claude Code-style prompt; "custom" reads `.pi/agent-tool-description.md`
-   * (project, falling back to `<agentDir>/agent-tool-description.md`) with
-   * `{{placeholder}}` substitution — a missing/empty file falls back to "full".
-   * The mode is read once at tool registration — changing it applies on the
-   * next pi session.
+   * Which tool descriptions the LLM sees. "compact" (default) uses terse Agent
+   * and SubagentWorkflow contracts for models where tool-spec tokens are
+   * expensive. "full" uses both rich Claude Code-style prompts. "custom" reads
+   * the Agent description from `.pi/agent-tool-description.md` (project, falling
+   * back to `<agentDir>/agent-tool-description.md`) and keeps SubagentWorkflow
+   * compact; a missing/empty custom Agent file falls back to its full prompt.
+   * Read once at tool registration — changes apply on the next pi session.
    */
   toolDescriptionMode?: ToolDescriptionMode;
   /**

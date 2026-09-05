@@ -1,13 +1,10 @@
 /**
  * tool-description.ts — the model-facing description of the `SubagentWorkflow` tool.
  *
- * This is a deliberate port of Claude Code's `Workflow` tool description, not a
- * paraphrase of it. The rule the text is held to: **match Claude Code's wording
- * everywhere; deviate only in the specific clause where its sentence would be
- * false about pi, and keep that deviation minimal and in its voice.** Wording
- * parity is the point — a user who knows one tool should not have to relearn
- * the other, and the orchestration patterns below are load-bearing guidance
- * that gets used badly when compressed.
+ * The full variant deliberately ports Claude Code's `Workflow` description;
+ * it deviates only where that text would be false about pi. The compact default
+ * preserves the executable contract but leaves recipes and rationale to
+ * docs/workflows.md. Both variants are tested against the runtime constants.
  *
  * Parts omitted because pi has no such feature: the `ultracode` opt-in, MCP
  * tools reached through `ToolSearch`, the `agent-<id>.jsonl` resume fallback,
@@ -24,12 +21,43 @@
  * the saved-workflow directories, and the reject-unknown-options guarantee.
  *
  * Kept out of index.ts purely for size. `{{placeholder}}` tokens are rendered by
- * the same substitution pass the Agent tool's description uses, so a
- * user-authored override can interpolate the live agent roster.
+ * the same substitution pass the Agent tool's description uses, so both modes
+ * interpolate the live agent roster.
  */
 
 /**
- * Rendered with `{{typeList}}` substituted. Keep the prose accurate to what the
+ * Default description. It keeps the executable contract while leaving recipes
+ * and rationale to docs/workflows.md. `custom` also uses this description:
+ * custom templates apply to Agent only, so they must not silently opt the much
+ * larger workflow prompt back in.
+ */
+export const compactWorkflowToolDescription = `Run a deterministic JavaScript workflow that orchestrates subagents. The run starts in the background, returns a task ID immediately, and notifies you when it finishes. Do not poll or sleep; inspect live progress in /agents → Workflows.
+
+Call this tool only when the user explicitly asks for a workflow, multi-agent orchestration, agent fan-out, a named/saved workflow, or invokes instructions that require SubagentWorkflow. Otherwise use Agent, or ask before incurring workflow-scale token use.
+
+Source: pass new code with \`script\`. The invocation persists it and returns its path; edit that file and rerun with \`scriptPath\`. Save reusable scripts as \`.pi/workflows/<name>.js\`, \`.agents/workflows/<name>.js\`, or \`<agent dir>/workflows/<name>.js\`, then invoke with \`name\`. Scripts are plain JavaScript, not TypeScript, and run in an async context.
+
+Every script must start with a pure literal (no calls, variables, spreads, or interpolation):
+\`export const meta = { name: 'name', description: 'one line', phases: [{ title: 'Scan' }] }\`
+\`name\` and \`description\` are required. \`whenToUse\` and \`phases\` are optional. A phase entry may include \`detail\` and \`model\`. Phase titles must exactly match the corresponding \`phase(title)\` calls.
+
+Globals:
+- \`agent(prompt, opts?)\` → final text, a schema-validated object, or \`null\` when skipped or terminally failed. Options: \`label\`, \`phase\`, \`schema\`, \`model\`, \`effort\`, \`isolation\`, \`agentType\`, \`gate\`, \`resume\`. Unknown options throw. \`schema\` supplies StructuredOutput; a child that never returns a valid call gets one retry, then \`null\`. \`effort\` is one of 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' and otherwise inherits the agent definition, then the parent. \`isolation: 'worktree'\` creates a temporary worktree, removes it when settled, and preserves changes on a branch. \`gate: '<command>'\` requires a zero exit after the child finishes. \`resume: '<label>'\` continues that labeled child and cannot be combined with \`agentType\`, \`model\`, \`effort\`, \`isolation\`, \`gate\`, or \`schema\`. \`agentType\` selects one of:
+{{typeList}}
+- \`pipeline(items, ...stages)\` → one result per item. Items advance independently without stage barriers; each stage receives \`(previousResult, originalItem, index)\`. A thrown stage yields \`null\` for that item and skips its remaining stages. Prefer this for multi-stage work.
+- \`parallel(thunks)\` → results after all thunks settle. A thrown thunk or agent error becomes \`null\`; fatal run errors such as cap breaches or nested-workflow load failures propagate. Use it only when later work requires all results.
+- \`phase(title)\` groups subsequent agents. Inside concurrent callbacks, prefer \`agent(..., { phase: title })\` to avoid shared phase-state races.
+- \`log(message)\` emits user-visible progress.
+- \`args\` is the invocation's JSON value verbatim, not a JSON-encoded string.
+- \`budget\` is \`{ total: null, spent(), remaining() }\`; \`spent()\` reports output tokens and \`remaining()\` returns Infinity because pi has no token target.
+- \`workflow(nameOrRef, args?)\` runs a saved workflow by name or \`{ scriptPath }\`, returning its value. It shares caps, budget, abort, and journal state. Nesting is limited to one level. Unknown names, unreadable paths, syntax errors, and deeper nesting throw.
+
+Runtime rules: standard JavaScript built-ins are available, but filesystem and Node.js APIs are not. \`Date.now()\`, argumentless \`new Date()\`, \`Math.random()\`, \`eval\`, and \`Function\` throw. Pass timestamps through \`args\`. Every launched agent must be awaited. Concurrent agent calls are capped at min(16, available CPUs - 2), with a floor of 1; excess calls queue. A run is capped at 1000 agents. Each parallel/pipeline call accepts at most 4096 items.
+
+The result includes \`runId\` and \`scriptPath\`. To resume a finished run after editing or interruption, invoke \`{ scriptPath, resumeFromRunId }\` in the same session. The longest unchanged prefix of successful agent calls is replayed; the first changed, new, or failed call and everything after it runs live. Script and args must match for a full cache hit. Read the adjacent \`<run id>.workflow.jsonl\` to inspect recorded returns.`;
+
+/**
+ * Full Claude Code-style description. Keep the prose accurate to what the
  * runtime actually implements — documenting a global we do not ship is worse
  * than documenting nothing, because the script only fails once it is running.
  * `workflow-tool-description.test.ts` pins the parts that can drift: the

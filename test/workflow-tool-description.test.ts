@@ -23,9 +23,16 @@ import {
   WORKFLOW_ITEM_CAP,
   workflowConcurrency,
 } from "../src/workflow/runtime.js";
-import { fullWorkflowToolDescription } from "../src/workflow/tool-description.js";
+import {
+  compactWorkflowToolDescription,
+  fullWorkflowToolDescription,
+} from "../src/workflow/tool-description.js";
 
 const description = fullWorkflowToolDescription;
+const contractDescriptions = [
+  ["compact", compactWorkflowToolDescription],
+  ["full", fullWorkflowToolDescription],
+] as const;
 const workerSource = readFileSync(
   fileURLToPath(new URL("../src/workflow/worker-source.ts", import.meta.url)),
   "utf8",
@@ -96,6 +103,41 @@ describe("the agent() contract it documents", () => {
     const listed = description.match(/reasoning effort for this agent call \(([^)]*)\)/)?.[1] ?? "";
     const quoted = [...listed.matchAll(/'(\w+)'/g)].map(m => m[1]);
     expect(quoted).toEqual(EFFORT_LEVELS);
+  });
+});
+
+describe.each(contractDescriptions)("the %s description's runtime contract", (_mode, text) => {
+  it("names every agent option the runtime accepts", () => {
+    for (const option of AGENT_OPTIONS) {
+      expect(text, `agent() option ${option} is undocumented`).toContain(option);
+    }
+  });
+
+  it("lists every resume exclusion and effort level", () => {
+    const resumeLine = text.split("\n").find(line => line.includes("resume") && line.includes("cannot be combined")) ?? "";
+    for (const option of RESUME_EXCLUSIONS) expect(resumeLine).toContain(option);
+    for (const effort of EFFORT_LEVELS) expect(text).toContain(`'${effort}'`);
+  });
+
+  it("documents globals, failures, and limits", () => {
+    for (const global of ["agent(", "pipeline(", "parallel(", "phase(", "log(", "args", "budget", "workflow("]) {
+      expect(text).toContain(global);
+    }
+    expect(text).toContain("null");
+    expect(text).toContain(`capped at ${WORKFLOW_AGENT_CAP}`);
+    expect(text).toContain(`at most ${WORKFLOW_ITEM_CAP} items`);
+    expect(text).toContain("min(16, available CPUs - 2)");
+  });
+
+  it("keeps the live agent roster placeholder", () => {
+    expect(text).toContain("{{typeList}}");
+  });
+});
+
+describe("the compact description", () => {
+  it("is materially smaller than full without dropping the contract", () => {
+    expect(compactWorkflowToolDescription.length).toBeLessThan(6_000);
+    expect(compactWorkflowToolDescription.length).toBeLessThan(fullWorkflowToolDescription.length / 3);
   });
 });
 
