@@ -47,6 +47,18 @@ pi -e ./src/index.ts
 
 Requires pi **0.84.0 or newer**: the [`SubagentWorkflow`](#subagentworkflow) tool builds on `constrainedSampling` (pi 0.82.0) and pi-tui's `stripTerminalSequences` (0.84.0). The `peerDependencies` range declares it, so npm flags an older pi at install time.
 
+### Delegation skill
+
+Package installs include [subagent-orchestration](skills/subagent-orchestration/SKILL.md), an on-demand playbook for choosing tasks, assigning ownership, briefing agents, and verifying results. Pi advertises its description to the model; invoke `/skill:subagent-orchestration` to load it explicitly. Essential calling rules remain in the tool descriptions.
+
+Loading only `src/index.ts` doesn't load the skill. To try both from this checkout:
+
+```bash
+pi -e ./src/index.ts --skill ./skills/subagent-orchestration/SKILL.md
+```
+
+To disable the bundled skill, set `"skills": []` on this package's object entry in Pi's `packages` settings. This skill is guidance for the orchestrator, separate from [skill preloading](#skill-preloading) into children.
+
 ### Other hosts
 
 This extension is developed and tested against [pi](https://pi.dev).
@@ -958,6 +970,8 @@ docs/                 # Long-form guides (shipped to npm; README links out to th
 examples/
   workflows/          # Runnable examples, executed by test/workflow-examples.test.ts
   agent-tool-description.md
+skills/
+  subagent-orchestration/SKILL.md # On-demand delegation playbook
 test/                 # vitest suite; e2e/ and perf/ subdirectories
 src/
   index.ts            # Extension entry: tool/command registration, /agents menu, rendering

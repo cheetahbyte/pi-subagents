@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Package installs include a subagent orchestration skill.** The on-demand playbook covers task selection, ownership, agent briefs, and result verification, with two examples. Load it explicitly with `/skill:subagent-orchestration`; tool descriptions remain the source of truth for calling conventions.
 - **Background children can ask their parent a question** with `ask_parent({ question })`; the parent answers with `answer_subagent_question({ question_id, answer })`. A top-level child's question goes to the root agent, while a nested child's question routes only to its immediate parent. Foreground children are refused — their parent is blocked on the `Agent` call — and a child can hold at most one pending question at a time. Cancelling the child, its parent, the tool call, or the manager rejects or clears the pending question, and questions do not survive a restart.
 
 ### Changed
