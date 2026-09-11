@@ -53,10 +53,10 @@ describe("buildParentContext", () => {
   });
 
   it("returns empty string when no entries produce extractable content", () => {
-    // toolResult is skipped, empty-summary compaction is skipped
+    // unknown roles are skipped, empty-summary compaction is skipped
     const out = buildParentContext(
       makeCtx([
-        { type: "message", message: { role: "tool_result", content: "..." } },
+        { type: "message", message: { role: "bashExecution", content: "..." } },
         { type: "compaction", summary: "" },
       ]),
     );
@@ -94,15 +94,19 @@ describe("buildParentContext", () => {
       .toBeLessThan(out.indexOf("[Assistant]: follow-up"));
   });
 
-  it("skips tool_result messages — they're too verbose for inherited context", () => {
+  it("includes tool calls and truncated tool results so the child does not redo them", () => {
     const out = buildParentContext(
       makeCtx([
         userMsg("real user"),
-        { type: "message", message: { role: "tool_result", content: "noisy tool output" } },
+        assistantMsg([{ type: "toolCall", name: "grep", arguments: { pattern: "foo" } }]),
+        { type: "message", message: { role: "toolResult", toolName: "grep", content: [{ type: "text", text: "x".repeat(300) }] } },
         assistantMsg([{ type: "text", text: "real assistant" }]),
       ]),
     );
-    expect(out).not.toContain("noisy tool output");
+    expect(out).toContain('[Tool Calls]:\n  grep {"pattern":"foo"}');
+    expect(out).toContain("[Tool Result (grep)]: " + "x".repeat(200) + "…");
+    expect(out).not.toContain("x".repeat(201));
+    expect(out).toContain("do not repeat that work");
     expect(out).toContain("[User]: real user");
     expect(out).toContain("[Assistant]: real assistant");
   });

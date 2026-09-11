@@ -103,7 +103,7 @@ describe("toolDescriptionMode", () => {
   it("background-agent guideline forbids polling and keeps the honest-status contract", () => {
     const joined = (setup().get("Agent").promptGuidelines as string[]).join("\n");
     expect(joined).toContain("don't poll or sleep");
-    expect(joined).toContain("continue other useful work");
+    expect(joined).toContain("end your turn and wait");
     expect(joined).toContain("fabricate or predict");
     expect(joined).toContain("still running");
   });

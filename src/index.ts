@@ -36,6 +36,7 @@ import { createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, ses
 import { SubagentScheduler } from "./schedule.js";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.js";
 import { applyAndEmitLoaded, loadSettings, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
+import { isSkillInstalled } from "./skill-loader.js";
 import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
 import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentQuestionDetails, type AgentRecord, type JoinMode, type NotificationDetails, type SubagentType, type ViewerMarkdownMode, type WidgetMode } from "./types.js";
 import { createMentionProvider, mentionRoster, type TypeInfo } from "./ui/agent-mention.js";
@@ -449,6 +450,11 @@ export default function (pi: ExtensionAPI) {
   // Holds notifications briefly so get_subagent_result can cancel them
   // before they reach pi.sendMessage (fire-and-forget).
   const pendingNudges = new Map<string, ReturnType<typeof setTimeout>>();
+  // What the model sees of a finished agent's answer. A 500-char cut left most
+  // results ending mid-sentence, and a model that reads a truncated answer
+  // tends to redo the search itself rather than call get_subagent_result.
+  const NUDGE_RESULT_MAX = 4000;
+  const GROUP_NUDGE_RESULT_MAX = 2000;
   const NUDGE_HOLD_MS = 200;
   // A queued result wait must observe completion before its held notification
   // can fire, so successful waits can still suppress that redundant nudge.
@@ -474,7 +480,7 @@ export default function (pi: ExtensionAPI) {
   function emitIndividualNudge(record: AgentRecord) {
     if (record.resultConsumed) return;  // re-check at send time
 
-    const notification = formatTaskNotification(record, 500, showCost);
+    const notification = formatTaskNotification(record, NUDGE_RESULT_MAX, showCost);
     const footer = record.outputFile ? `\nFull transcript available at: ${record.outputFile}` : '';
 
     pi.sendMessage<NotificationDetails>({
@@ -504,7 +510,7 @@ export default function (pi: ExtensionAPI) {
         const unconsumed = records.filter(r => !r.resultConsumed);
         if (unconsumed.length === 0) { widget.update(); return; }
 
-        const notifications = unconsumed.map(r => formatTaskNotification(r, 300, showCost)).join('\n\n');
+        const notifications = unconsumed.map(r => formatTaskNotification(r, GROUP_NUDGE_RESULT_MAX, showCost)).join('\n\n');
         const label = partial
           ? `${unconsumed.length} agent(s) finished (partial — others still running)`
           : `${unconsumed.length} agent(s) finished`;
@@ -1508,6 +1514,13 @@ export default function (pi: ExtensionAPI) {
     ? `\n- Use isolation: "worktree" to give the agent its own git worktree (safe parallel file modifications); leave it unset, or pass "off", for none. The worktree is removed when the agent finishes; if it made changes, they are committed to a branch and the branch is named in the result.`
     : "";
 
+  // Matt Pocock's `handoff` skill (skills/productivity/handoff) writes a
+  // compaction of the conversation for a fresh agent. When it is installed, a
+  // long or context-heavy delegation should go through it rather than through
+  // a prompt written from memory.
+  const handoffGuideline = isSkillInstalled("handoff", process.cwd())
+    ? `\n- A \`handoff\` skill is installed. For a delegation that depends on a long conversation, invoke it first and pass the resulting document's path in the prompt instead of restating the history.`
+    : "";
   const isolationCompactGuideline = isWorktreeIsolationEnabled()
     ? `\n- isolation: "worktree" gives the agent its own git worktree (removed on completion); changes land on a branch named in the result.`
     : "";
@@ -1523,9 +1536,9 @@ Custom agents: .pi/agents/<name>.md (project) or ${getAgentDir()}/agents/<name>.
 Notes:
 - description: 3-5 words (shown in UI). Prompts must be self-contained — the agent has not seen this conversation.
 - Parallel work: one message, multiple Agent calls — they run concurrently.
-- Subagents run in the background by default; you'll be notified when one completes. Pass run_in_background: false only when your very next action depends on the result and nothing else could usefully happen while it runs. Never fabricate or predict a pending agent's results — if the user asks before the notification arrives, say it's still running.
+- Subagents run in the background by default; you'll be notified when one completes. Pass run_in_background: false when your very next action depends on the result. Otherwise, if nothing independent remains after launching, end your turn — do not search for the same thing yourself while you wait. Never fabricate or predict a pending agent's results — if the user asks before the notification arrives, say it's still running.
 - The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done.
-- resume continues a previous agent by ID; steer_subagent messages a running one.${isolationCompactGuideline}`;
+- resume continues a previous agent by ID; steer_subagent messages a running one.${isolationCompactGuideline}${handoffGuideline}`;
 
   const fullAgentToolDescription = `Launch a new agent to handle complex, multi-step tasks autonomously. Each agent type has specific capabilities and tools available to it.
 
@@ -1546,8 +1559,8 @@ If the target is already known, use a direct tool — \`read\` for a known path,
 - When you launch multiple agents for independent work, send them in a single message with multiple tool uses so they run concurrently. If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple Agent tool use content blocks.
 - When the agent is done, it returns a single message back to you. The result is not visible to the user — to show the user, send a text message with a concise summary.
 - Trust but verify: an agent's summary describes what it intended to do, not necessarily what it did. When an agent writes or edits code, check the actual changes before reporting the work as done.
-- Agents run in the background by default. When an agent runs in the background, you will be automatically notified when it completes — do NOT sleep, poll, or proactively check on its progress. Continue with other work or respond to the user instead.
-- **Foreground vs background**: Pass \`run_in_background: false\` only when your very next action depends on the agent's result and nothing else could usefully happen while it runs — e.g., a research agent whose finding gates the edit you're about to make. Otherwise let it run in the background (the default) — this includes fire-and-forget work, independent investigations, and anything where the user might hand you something else in the meantime. Wanting the result "next" is not enough on its own.
+- Agents run in the background by default. When an agent runs in the background, you will be automatically notified when it completes — do NOT sleep, poll, or proactively check on its progress. Do other work only if it is independent of the result; if nothing independent remains, end your turn and wait for the notification. Never run the same search yourself while an agent is running it.
+- **Foreground vs background**: Pass \`run_in_background: false\` when your very next action depends on the agent's result — e.g., a research agent whose finding gates the edit you're about to make. Let it run in the background (the default) for fire-and-forget work, independent investigations, and anything where the user might hand you something else in the meantime.
 - **Don't race**: after launching a background agent, you know nothing about its results. Never fabricate or predict them in any format — not as prose, summary, or structured output. The completion notification arrives in a later turn; it is never something you write yourself. If the user asks before it lands, say the agent is still running — give status, not a guess.
 - Use resume with an agent ID to continue a previous agent's work. A new (non-resume) Agent call starts a fresh agent with no memory of prior runs, so the prompt must be self-contained.
 - Use steer_subagent to send mid-run messages to a running background agent.
@@ -1555,7 +1568,7 @@ If the target is already known, use a direct tool — \`read\` for a known path,
 - If an agent's description says it should be used proactively, try to use it without the user having to ask for it first.
 - Use model to specify a different model (as "provider/modelId", or fuzzy e.g. "haiku", "sonnet").
 - Use thinking to control extended thinking level.
-- Use inherit_context if the agent needs the parent conversation history.${isolationGuideline}${scheduleGuideline}
+- Use inherit_context if the agent needs the parent conversation history. It carries what you have already searched and read, so the agent does not redo it.${isolationGuideline}${scheduleGuideline}
 
 ## Writing the prompt
 
@@ -1568,7 +1581,9 @@ Brief the agent like a smart colleague who just walked into the room — it hasn
 
 Terse command-style prompts produce shallow, generic work.
 
-**Never delegate understanding.** Don't write "based on your findings, fix the bug" or "based on the research, implement it." Those phrases push synthesis onto the agent instead of doing it yourself. Write prompts that prove you understood: include file paths, line numbers, what specifically to change.`;
+**Never delegate understanding.** Don't write "based on your findings, fix the bug" or "based on the research, implement it." Those phrases push synthesis onto the agent instead of doing it yourself. Write prompts that prove you understood: include file paths, line numbers, what specifically to change.
+
+**State what you already know.** List the files you have read and the searches you have run, with their outcome, so the agent starts from your findings instead of repeating them.${handoffGuideline}`;
 
   // `toolDescriptionMode: "custom"` — user-authored description with live
   // dynamic parts. Project file wins over global; missing/empty falls back to
@@ -1580,6 +1595,7 @@ Terse command-style prompts produce shallow, generic work.
       compactTypeList: buildCompactTypeListText,
       agentDir: getAgentDir,
       isolationGuideline: () => isolationGuideline,
+      handoffGuideline: () => handoffGuideline,
       scheduleGuideline: () => scheduleGuideline,
     };
     // Replacement callback (not a string) — agent descriptions may contain `$&` etc.
@@ -1627,8 +1643,8 @@ Terse command-style prompts produce shallow, generic work.
     description: agentToolDescription,
     promptSnippet: "Launch autonomous sub-agents for complex multi-step tasks",
     promptGuidelines: [
-      "Use Agent when the task matches an agent type's description or when independent work can run in parallel; otherwise use direct tools (read, grep, find) for known targets. Don't duplicate work you've delegated to an agent.",
-      "Background agents notify you on completion — don't poll or sleep waiting for one; continue other useful work. Never fabricate or predict a pending agent's results; if asked, say it's still running.",
+      "Use Agent when the task matches an agent type's description or when independent work can run in parallel; otherwise use direct tools (read, grep, find) for known targets. Once you have delegated a search, do not run it yourself as well.",
+      "Background agents notify you on completion — don't poll or sleep waiting for one. If nothing independent of its result remains, end your turn and wait. Never fabricate or predict a pending agent's results; if asked, say it's still running.",
     ],
     parameters: Type.Object({
       prompt: Type.String({

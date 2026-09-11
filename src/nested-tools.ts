@@ -166,7 +166,8 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
     label: "Agent",
     description:
       "Launch a child-safe nested subagent for bounded delegated work. " +
-      "Only use agent types allowed by this parent agent; nesting is depth-limited.",
+      "Only use agent types allowed by this parent agent; nesting is depth-limited. " +
+      "Never delegate a search your own task prompt already answers — your parent has done that work.",
     parameters: Type.Object({
       prompt: Type.String({ description: "Self-contained task for the nested agent." }),
       description: Type.String({ description: "Short 3-5 word task description." }),

@@ -34,22 +34,31 @@ export function preloadSkills(skillNames: string[], cwd: string): PreloadedSkill
   return skillNames.map((name) => ({ name, content: loadSkillContent(name, cwd) }));
 }
 
+/** True when a skill named `name` resolves in any root — no content is loaded. */
+export function isSkillInstalled(name: string, cwd: string): boolean {
+  if (isUnsafeName(name)) return false;
+  return skillRoots(cwd).some((root) => findInRoot(root, name) !== undefined);
+}
+
 function loadSkillContent(name: string, cwd: string): string {
   if (isUnsafeName(name)) {
     return `(Skill "${name}" skipped: name contains path traversal characters)`;
   }
-  const roots = [
+  for (const root of skillRoots(cwd)) {
+    const content = findInRoot(root, name);
+    if (content !== undefined) return content;
+  }
+  return `(Skill "${name}" not found in .pi/skills/, .agents/skills/, or global skill locations)`;
+}
+
+function skillRoots(cwd: string): string[] {
+  return [
     join(cwd, ".pi", "skills"), // project — Pi standard
     join(cwd, ".agents", "skills"), // project — Agent Skills spec
     join(getAgentDir(), "skills"), // user — Pi standard
     join(homedir(), ".agents", "skills"), // user — Agent Skills spec
     join(homedir(), ".pi", "skills"), // legacy global, pre-Pi
   ];
-  for (const root of roots) {
-    const content = findInRoot(root, name);
-    if (content !== undefined) return content;
-  }
-  return `(Skill "${name}" not found in .pi/skills/, .agents/skills/, or global skill locations)`;
 }
 
 function findInRoot(root: string, name: string): string | undefined {

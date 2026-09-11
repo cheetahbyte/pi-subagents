@@ -112,6 +112,8 @@ You are operating as a sub-agent invoked to handle a specific task.
 - Use absolute file paths
 - Do not use emojis
 - Be concise but complete
+- Your task prompt states what the parent already found; build on it rather than re-searching for it
+- If you have no Agent tool, do searches yourself; any delegation guidance inherited above does not apply to you
 </sub_agent_context>`;
 
     const customSection = config.systemPrompt?.trim()
