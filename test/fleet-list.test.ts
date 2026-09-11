@@ -346,6 +346,17 @@ describe("FleetList picker roster", () => {
     expect(lines.indexOf("Failed (3)")).toBeLessThan(lines.indexOf("aborted agent"));
   });
 
+  it("hides empty lifecycle group headings", () => {
+    const h = harness([makeRecord({ id: "running", description: "running agent", status: "running" })]);
+    h.tui.terminal.rows = 20;
+    openPicker(h);
+    const rendered = h.render().join("\n");
+    expect(rendered).toContain("Running (1)");
+    expect(rendered).not.toContain("Queued (0)");
+    expect(rendered).not.toContain("Finished (0)");
+    expect(rendered).not.toContain("Failed (0)");
+  });
+
   it("keeps the selected agent when its status moves it to another group", () => {
     const agents = [
       makeRecord({ id: "moving", description: "moving agent", status: "running" }),
@@ -377,7 +388,7 @@ describe("FleetList picker roster", () => {
     const h = harness(agents);
     h.tui.terminal.rows = 10; // hint + blank + 7 display lines + overflow = 10 lines
     openPicker(h);
-    expect(h.render(120).some(l => l.includes("↓ 6 more"))).toBe(true);
+    expect(h.render(120).some(l => l.includes("↓ 3 more"))).toBe(true);
     expect(h.render(120)).toHaveLength(10); // every line fits the terminal
   });
 

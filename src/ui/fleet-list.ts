@@ -579,7 +579,7 @@ class FleetPicker {
       const entries = roster
         .map((entry, rosterIndex) => ({ entry, rosterIndex }))
         .filter(item => item.entry.kind === "agent" && fleetGroup(item.entry.record) === group);
-      display.push({ text: `  ${th.fg("dim", `${group} (${entries.length})`)}` }, ...entries);
+      if (entries.length > 0) display.push({ text: `  ${th.fg("dim", `${group} (${entries.length})`)}` }, ...entries);
     }
     const selectedLine = display.findIndex(line => line.rosterIndex === sel);
     // Hint + blank separator top the list; the terminal height bounds the rest.

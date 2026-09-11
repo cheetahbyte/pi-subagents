@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **FleetView displays a selected subagent in Pi's native transcript.** The extension uses a guarded private compatibility patch because Pi does not expose transcript replacement; unsupported Pi versions retain the existing conversation overlay. Selecting `main`, pressing Esc, disabling FleetView, or unloading the extension restores the parent transcript without mutating either session.
 
 ### Fixed
+- **FleetView hides empty lifecycle groups.** The full-screen picker now omits `Queued`, `Running`, `Finished`, or `Failed` headings with no entries, keeping sparse rosters compact.
 - **Workflow-owned children cannot be steered or resumed through `@<id>`.** Mention resolution now applies the same ownership filter as the agent tools and picker; use the workflow inspector to manage these children.
 - **The workflow stand-down now recognises a lowercase `workflow` tool** ([#283](https://github.com/tintinweb/pi-subagents/issues/283) — thanks [@zampierilucas](https://github.com/zampierilucas)). The match is exact on purpose, and the set held `Workflow` and `SubagentWorkflow` only, so `@quintinshaw/pi-dynamic-workflows` — which registers lowercase `workflow` — never tripped it: with `workflowsEnabled` unset, both orchestrators reached the model and nothing warned. Adding the third name is the whole fix; exactness is kept, so a `list_workflows` still cannot take the feature down.
 

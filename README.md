@@ -143,14 +143,11 @@ Press `←` at an empty prompt to open the full-screen picker:
   ● main
   Workflows (1)
   ○ workflow         audit-src       12/40 agents · 32s · ↓ 26.4k tokens
-  Queued (0)
   Running (1)
   ○ general-purpose  Review auth                  11s · ↓ 13.1k tokens
-  Finished (0)
-  Failed (0)
 ```
 
-[Workflow runs](#subagentworkflow) appear in a separate **Workflows** section before the agent groups. `Enter` opens the same inspector as `/agents → Workflows`; closing it returns to the picker. Workflow-owned children are hidden from ordinary agent groups, the above-editor widget, footer counts, `/agents` agent menus, and `@handle` resolution. Workflows use their own concurrency cap, outside both session pools.
+[Workflow runs](#subagentworkflow) appear in a separate **Workflows** section before the agent groups. Empty lifecycle categories are omitted, so the picker shows only groups that contain entries. `Enter` opens the same inspector as `/agents → Workflows`; closing it returns to the picker. Workflow-owned children are hidden from ordinary agent groups, the above-editor widget, footer counts, `/agents` agent menus, and `@handle` resolution. Workflows use their own concurrency cap, outside both session pools.
 
 The picker shows up to 30 retained top-level agents, newest first within **Queued**, **Running**, **Finished**, and **Failed**. Queued agents are visible before their session exists but cannot be opened yet. `↑`/`↓` select a row; `Enter` opens it; `Esc` or selecting `main` restores the parent transcript. A configured agent color remains visible on the selected row.
 

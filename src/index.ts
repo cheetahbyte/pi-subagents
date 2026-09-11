@@ -1643,7 +1643,7 @@ Terse command-style prompts produce shallow, generic work.
     description: agentToolDescription,
     promptSnippet: "Launch autonomous sub-agents for complex multi-step tasks",
     promptGuidelines: [
-      "Use Agent when the task matches an agent type's description or when independent work can run in parallel; otherwise use direct tools (read, grep, find) for known targets. Once you have delegated a search, do not run it yourself as well.",
+      "Do small, localized changes yourself; a subagent starts without your context and must re-explore the codebase. Use Agent when work is substantial and independent, when parallelism pays off, or when isolating context matters. Matching an agent type is not a reason on its own. Do not repeat work you have delegated.",
       "Background agents notify you on completion — don't poll or sleep waiting for one. If nothing independent of its result remains, end your turn and wait. Never fabricate or predict a pending agent's results; if asked, say it's still running.",
     ],
     parameters: Type.Object({
