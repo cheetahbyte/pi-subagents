@@ -1,6 +1,6 @@
 # Security Policy
 
-This document explains the security model behind `@tintinweb/pi-subagents` and
+This document explains the security model behind `@cheetahbyte/pi-subagents` and
 where the boundaries are.
 
 `pi-subagents` is a [pi](https://pi.dev) extension. It spawns and orchestrates
@@ -31,7 +31,7 @@ coding agent and its sub-agents trivially, and this cannot be protected against.
 
 If you believe you found a security vulnerability in `pi-subagents`, please
 report it privately by opening a draft advisory through
-[GitHub Security Advisories](https://github.com/tintinweb/pi-subagents/security/advisories/new)
+[GitHub Security Advisories](https://github.com/cheetahbyte/pi-subagents/security/advisories/new)
 for this repository.
 
 Please include:

@@ -121,7 +121,7 @@ Location: `CHANGELOG.md` (single file, [Keep a Changelog](https://keepachangelog
 - Entries are concise — a bold lead-in stating what changed, then a sentence or two on why it changed and anything a user must do about it. Aim for 2–4 sentences; a genuinely intricate change may run longer, but length is never the goal. Do not match the density of older entries, several of which are far too long.
 - Cut what the reader doesn't need: narration of the investigation, alternatives considered and rejected, restatements of the diff, and detail recoverable from the code or the linked issue. Name a file or symbol only when it helps someone find the change.
 - Released version sections (e.g. `## [0.12.0]`) are immutable; never modify them.
-- Attribute external contributions: `... ([#456](https://github.com/tintinweb/pi-subagents/pull/456) — thanks [@username](https://github.com/username))`.
+- Attribute external contributions: `... ([#456](https://github.com/cheetahbyte/pi-subagents/pull/456) — thanks [@username](https://github.com/username))`.
 
 ## Releasing
 
