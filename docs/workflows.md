@@ -12,7 +12,7 @@ Until workflows existed, the only way to run several agents at once was to name 
 
 A script can loop, branch, and fan out over a list discovered at runtime. A batch of tool calls cannot. Each `agent()` call in the script spawns a real subagent with its own context window, its own tools, and its own model — the script is only the coordinator, and it has no filesystem or network of its own.
 
-Use the `Agent` tool for one delegated task, or a handful you can name up front. Reach for a workflow when the *number* of agents depends on something discovered at runtime, when work flows through stages, or when you want findings independently verified before you believe them. It costs a subprocess per agent, so it is not the thing to dress a single task up as.
+Use the `Agent` tool for one delegated task, or a handful you can name up front. A workflow suits work where the *number* of agents depends on something discovered at runtime, where work flows through stages, or where you want findings independently verified before you believe them. The model only starts one when you explicitly ask for a workflow, fan-out, or a named workflow; otherwise it uses `Agent`. It costs a subprocess per agent, so it is not the thing to dress a single task up as.
 
 ## The lifecycle
 
