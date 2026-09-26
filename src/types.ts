@@ -370,6 +370,8 @@ export interface ScheduledSubagent {
   max_turns?: number;
   isolated?: boolean;
   isolation?: IsolationMode;
+  /** Raw JSON Schema, recompiled at fire time: the store file can be hand-edited. */
+  schema?: Record<string, unknown>;
 
   // state
   enabled: boolean;

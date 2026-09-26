@@ -1185,6 +1185,10 @@ export class AgentManager {
       record.isBackground = true;
       record.resultConsumed = false;
       record.result = undefined;
+      // A resumed run never gets a StructuredOutput tool; a stale payload would
+      // answer this run with the last one's JSON.
+      record.structuredJson = undefined;
+      record.structuredRetried = undefined;
       record.error = undefined;
       record.completedAt = undefined;
       record.status = "queued";
@@ -1222,6 +1226,8 @@ export class AgentManager {
     record.startedAt = Date.now();
     record.completedAt = undefined;
     record.result = undefined;
+    record.structuredJson = undefined;
+    record.structuredRetried = undefined;
     record.error = undefined;
 
     try {

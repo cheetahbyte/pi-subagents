@@ -24,6 +24,7 @@ import { resolveSpawnType } from "./agent-types.js";
 import { resolveModel } from "./model-resolver.js";
 import type { ScheduleStore } from "./schedule-store.js";
 import type { IsolationMode, ScheduledSubagent, SubagentType, ThinkingLevel } from "./types.js";
+import { type CompiledSchema, compileJsonSchema } from "./workflow/json-schema.js";
 
 /** Event emitted on `pi.events` for cross-extension consumers. */
 export type ScheduleChangeEvent =
@@ -45,6 +46,7 @@ export interface NewJobInput {
   max_turns?: number;
   isolated?: boolean;
   isolation?: IsolationMode;
+  schema?: Record<string, unknown>;
 }
 
 export class SubagentScheduler {
@@ -108,6 +110,7 @@ export class SubagentScheduler {
       max_turns: input.max_turns,
       isolated: input.isolated,
       isolation: input.isolation,
+      schema: input.schema,
       enabled: true,
       createdAt: new Date().toISOString(),
       runCount: 0,
@@ -238,6 +241,19 @@ export class SubagentScheduler {
       if (typeof r !== "string") resolvedModel = r;
     }
 
+    // Store holds JSON; a schema that no longer compiles fails the fire loudly
+    // rather than running unstructured.
+    let structuredOutput: CompiledSchema | undefined;
+    if (job.schema !== undefined) {
+      const compilation = compileJsonSchema(job.schema, "Scheduled job `schema`");
+      if (!compilation.ok) {
+        store.update(id, { lastRun: new Date().toISOString(), lastStatus: "error" });
+        this.emit({ type: "error", jobId: id, error: compilation.message });
+        return;
+      }
+      structuredOutput = compilation.compiled;
+    }
+
     let agentId: string;
     try {
       // Re-resolve at fire time against the registry as it stands. This does not
@@ -257,6 +273,7 @@ export class SubagentScheduler {
         isolated: job.isolated,
         thinkingLevel: job.thinking,
         isolation: job.isolation,
+        structuredOutput,
         // A scheduled run has no tool call to build this, so without it the
         // conversation viewer shows nothing about how the job was configured.
         // The model is left out on purpose: agent-manager fills in the effective

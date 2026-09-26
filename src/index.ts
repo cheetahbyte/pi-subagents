@@ -26,7 +26,7 @@ import { inChildSessionContext } from "./child-context.js";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.js";
 import { loadCustomAgents } from "./custom-agents.js";
 import { GroupJoinManager } from "./group-join.js";
-import { isolationParam, resolveAgentInvocationConfig, resolveJoinMode } from "./invocation-config.js";
+import { isolationParam, resolveAgentInvocationConfig, resolveJoinMode, schemaParam } from "./invocation-config.js";
 import { describeMention, handleBase, isReservedHandle, parseMention, resolveHandleToType, stripAgentPrefix } from "./mention.js";
 import { runMentionClone } from "./mention-clone.js";
 import { describeModel, type ModelRegistry, resolveModel } from "./model-resolver.js";
@@ -68,6 +68,7 @@ import { decideWorkflowCollision, FOREIGN_WORKFLOW_TOOL_NAMES } from "./workflow
 import { WORKFLOW_ENTRY_TYPE, type WorkflowEntryData, workflowEntryData } from "./workflow/entry.js";
 import { createWorkflowHost } from "./workflow/host.js";
 import { appendJournal, readJournal, type WorkflowJournalEntry } from "./workflow/journal.js";
+import { type CompiledSchema, compileJsonSchema } from "./workflow/json-schema.js";
 import { extractMeta, type WorkflowMeta, workflowCallName } from "./workflow/meta.js";
 import { elapsedMs } from "./workflow/progress.js";
 import { runWorkflow } from "./workflow/runtime.js";
@@ -182,10 +183,12 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number, showC
   const cost = showCost ? getLifetimeCost(record.lifetimeUsage) : 0;
   const costXml = cost > 0 ? `<estimated_cost_usd>${cost.toFixed(4)}</estimated_cost_usd>` : "";
 
-  const resultPreview = record.result
-    ? record.result.length > resultMaxLen
-      ? record.result.slice(0, resultMaxLen) + "\n...(truncated, use get_subagent_result for full output)"
-      : record.result
+  // The schema'd payload is what the caller asked for; `record.result` stays the prose fallback.
+  const resultText = record.structuredJson ?? record.result;
+  const resultPreview = resultText
+    ? resultText.length > resultMaxLen
+      ? resultText.slice(0, resultMaxLen) + "\n...(truncated, use get_subagent_result for full output)"
+      : resultText
     : "No output.";
 
   return [
@@ -562,6 +565,8 @@ export default function (pi: ExtensionAPI) {
       type: record.type,
       description: record.description,
       result: record.result,
+      // Beside `result`, never instead of it: listeners without a schema still read prose.
+      structuredJson: record.structuredJson,
       error: record.error,
       status: record.status,
       toolUses: record.toolUses,
@@ -1700,6 +1705,7 @@ Terse command-style prompts produce shallow, generic work.
         }),
       ),
       ...isolationParam(isWorktreeIsolationEnabled()),
+      ...schemaParam,
       ...scheduleParam,
     }),
 
@@ -1853,6 +1859,19 @@ Terse command-style prompts produce shallow, generic work.
       const fallbackNote = dispatch.ok && dispatch.fellBackFrom !== undefined
         ? `Note: Unknown agent type "${dispatch.fellBackFrom}" — using ${resolveType(subagentType) ? subagentType : "the fallback agent config"}.\n\n`
         : "";
+
+      // Compiled before anything spawns so a bad schema fails the call, not the
+      // agent's last turn. Refused with `resume`: a reopened session never
+      // rebuilds its tool set, so no StructuredOutput tool would exist.
+      let structuredOutput: CompiledSchema | undefined;
+      if (params.schema !== undefined) {
+        if (params.resume) {
+          return textResult("Cannot combine `schema` with `resume` — a resumed session has no StructuredOutput tool. Spawn a fresh agent instead.");
+        }
+        const compilation = compileJsonSchema(params.schema, "`schema`");
+        if (!compilation.ok) return textResult(compilation.message);
+        structuredOutput = compilation.compiled;
+      }
 
       const displayName = getDisplayName(subagentType);
 
@@ -2012,6 +2031,7 @@ Terse command-style prompts produce shallow, generic work.
             max_turns: effectiveMaxTurns,
             isolated: isolated,
             isolation: isolation,
+            schema: params.schema as Record<string, unknown> | undefined,
           });
           const next = scheduler.getNextRun(job.id);
           return textResult(
@@ -2119,6 +2139,7 @@ Terse command-style prompts produce shallow, generic work.
           thinkingLevel: thinking,
           isBackground: true,
           isolation,
+          structuredOutput,
           invocation: agentInvocation,
           rootSessionId: ctx.sessionManager.getSessionId(),
           ...bgCallbacks,
@@ -2272,6 +2293,7 @@ Terse command-style prompts produce shallow, generic work.
           inheritContext,
           thinkingLevel: thinking,
           isolation,
+          structuredOutput,
           invocation: agentInvocation,
           signal,
           rootSessionId: ctx.sessionManager.getSessionId(),
@@ -2319,7 +2341,7 @@ Terse command-style prompts produce shallow, generic work.
       }
       return textResult(
         `${fallbackNote}Agent completed in ${formatMs(durationMs)} (${statsParts.join(", ")})${getForegroundOutcomeNote(record.status)}.\n\n` +
-        (record.result?.trim() || "No output."),
+        (record.structuredJson ?? (record.result?.trim() || "No output.")),
         details,
       );
     },
@@ -2855,7 +2877,7 @@ Terse command-style prompts produce shallow, generic work.
       } else if (record.status === "error") {
         output += `Error: ${record.error}${partialOutputSuffix(record)}`;
       } else {
-        output += record.result?.trim() || "No output.";
+        output += record.structuredJson ?? (record.result?.trim() || "No output.");
       }
 
       // Mark result as consumed — suppresses the completion notification

@@ -24,6 +24,7 @@ For the channel list, the reply envelope, the per-channel snippets and the event
 | `isBackground` | boolean | Occupies a `maxConcurrent` slot and queues behind them. Every RPC spawn runs detached regardless; this is what decides whether it is *pooled* |
 | `bypassQueue` | boolean | Starts immediately even when the concurrency limit would queue it. The slot is still counted once running |
 | `structuredOutput` | CompiledSchema | Makes the child report through a `StructuredOutput` tool |
+| `schema` | JSON Schema object | The serializable form of the same thing: compiled at the RPC boundary into `structuredOutput`, and the raw field is dropped before the manager sees it. The validated payload comes back as `structuredJson` on `subagents:completed`, beside the unchanged prose `result` |
 | `isolation` | `"worktree"` | Temp git worktree, committed to a `pi-agent-*` branch on completion |
 | `cwd` | absolute path | The agent's tools operate here; `.pi` config still loads from the parent session's project |
 | `invocation` | AgentInvocation | Resolved snapshot used for UI display |
@@ -49,7 +50,7 @@ Four things that are not obvious from the tables:
 
 - **Nothing is required at runtime.** `description` is non-optional in TypeScript and never validated. A spawn with no `options` at all is legal and is what `test/cross-extension-rpc.test.ts:81-94` pins.
 - **`bypassQueue` is not stripped.** Its own doc comment scopes it to the scheduler and the `/agents` generator, but a bus caller can set it and skip the `maxConcurrent` check.
-- **`structuredOutput` is documented "set only by the workflow host"** (`src/agent-manager.ts:231-234`) and is also not stripped.
+- **`structuredOutput` is documented "set only by the workflow host"** (`src/agent-manager.ts:231-234`) and is also not stripped. A bus caller that cannot construct one sends `schema` instead and lets the boundary compile it.
 - **`signal` and the `on*` callbacks are function values.** They work only because the bus is in-process. A caller that genuinely serializes its payload cannot use them, and they arrive as `undefined` rather than failing.
 
 ### Names that look right and are not
@@ -65,7 +66,7 @@ One of these already shipped as a bug in this project's own README example, so i
 | `max_turns` / `thinking` / `inherit_context` | Ignored — tool and frontmatter spellings | `maxTurns` / `thinkingLevel` / `inheritContext` |
 | `memory` | Nothing. **There is no such option** | Memory scope comes only from the agent definition's frontmatter |
 
-**None of these produce an error.** Option keys are not validated on this path at all — unknown ones are accepted and dropped. (Contrast `agent()` inside a [workflow](workflows.md), which rejects unknown keys by name.)
+**None of these produce an error.** Unknown option keys are accepted and dropped; the only one validated on this path is `schema`, which fails the spawn rather than running unstructured. (Contrast `agent()` inside a [workflow](workflows.md), which rejects unknown keys by name.)
 
 ## Errors
 
@@ -89,6 +90,7 @@ Every failure reaches the caller as `{ success: false, error }`, where `error` i
 | `Agent is owned by another agent or workflow` | stop — `:178` |
 | `Agent is not running` | stop — `:182`. The record exists, so it has already settled |
 | `Agent not found or still running` | consume — `:193` |
+| `spawn options.schema must be a JSON Schema object.` (and the other four `compileJsonSchema` refusals — non-object root, not serializable, over 64 KB, unwalkable) | `src/workflow/json-schema.ts:58-98`, via the spawn handler |
 
 Three things the table cannot show:
 

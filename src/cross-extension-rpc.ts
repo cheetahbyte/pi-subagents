@@ -17,6 +17,7 @@ import { isTopLevelAgent } from "./agent-manager.js";
 import { type ModelRegistry, resolveModel } from "./model-resolver.js";
 import { checkModelScope } from "./model-scope.js";
 import type { AgentRecord } from "./types.js";
+import { compileJsonSchema } from "./workflow/json-schema.js";
 
 /** Minimal event bus interface needed by the RPC handlers. */
 export interface EventBus {
@@ -153,6 +154,15 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
           modelInput: label,
         });
         if (verdict.kind === "error") throw new Error(verdict.message);
+      }
+
+      // Bus callers send a raw JSON Schema (serializable), not a CompiledSchema;
+      // an unusable one must be an error envelope, not an unstructured run.
+      const { schema, ...withoutSchema } = normalizedOptions;
+      if (schema !== undefined) {
+        const compilation = compileJsonSchema(schema, "spawn options.schema");
+        if (!compilation.ok) throw new Error(compilation.message);
+        normalizedOptions = { ...withoutSchema, structuredOutput: compilation.compiled };
       }
 
       const id = manager.spawn(pi, ctx, type, prompt, normalizedOptions);

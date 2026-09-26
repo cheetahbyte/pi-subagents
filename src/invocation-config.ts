@@ -54,6 +54,17 @@ export function isolationParam(enabled: boolean): Partial<typeof isolationParamS
   return enabled ? isolationParamShape : {};
 }
 
+/** Open object so the schema passes through verbatim; `compileJsonSchema` validates it at each tool boundary. */
+export const schemaParam = {
+  schema: Type.Optional(
+    Type.Object({}, {
+      additionalProperties: true,
+      description:
+        'Optional JSON Schema (object at the root) for the answer. The agent must then report by calling StructuredOutput, and its result comes back as JSON matching this schema instead of prose. Cannot be combined with resume.',
+    }),
+  ),
+};
+
 interface AgentInvocationParams {
   model?: string;
   thinking?: string;

@@ -17,7 +17,7 @@ import {
   resolveTypeIn,
 } from "./agent-types.js";
 import { loadCustomAgents } from "./custom-agents.js";
-import { isolationParam, resolveAgentInvocationConfig } from "./invocation-config.js";
+import { isolationParam, resolveAgentInvocationConfig, schemaParam } from "./invocation-config.js";
 import { resolveModel } from "./model-resolver.js";
 import { checkModelScope } from "./model-scope.js";
 import {
@@ -35,6 +35,7 @@ import type {
   ThinkingLevel,
 } from "./types.js";
 import { addUsage } from "./usage.js";
+import { type CompiledSchema, compileJsonSchema } from "./workflow/json-schema.js";
 import { isWorktreeIsolationEnabled } from "./worktree.js";
 
 /**
@@ -59,6 +60,7 @@ interface NestedSpawnOptions {
   thinkingLevel?: ThinkingLevel;
   isBackground?: boolean;
   isolation?: IsolationMode;
+  structuredOutput?: CompiledSchema;
   invocation?: AgentInvocation;
   signal?: AbortSignal;
   onAssistantUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
@@ -139,7 +141,7 @@ function formatRecord(record: AgentRecord, position: ResultPosition): string {
   // A truncated run must not read as a finished one. The top-level path carries
   // this in its result headline; a nested result has no headline, so the note
   // leads — appended, it would look like part of the child's own output.
-  const text = record.result?.trim() || record.error?.trim() || "No output.";
+  const text = record.structuredJson ?? (record.result?.trim() || record.error?.trim() || "No output.");
   const note = position === "inline"
     ? getForegroundOutcomeNote(record.status)
     : getStatusNote(record.status);
@@ -184,8 +186,21 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       isolated: Type.Optional(Type.Boolean()),
       inherit_context: Type.Optional(Type.Boolean()),
       ...isolationParam(isWorktreeIsolationEnabled()),
+      ...schemaParam,
     }),
     execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
+      // Same boundary as the top-level tool: compile before spawning, refuse
+      // `resume` (a reopened session has no StructuredOutput tool).
+      let structuredOutput: CompiledSchema | undefined;
+      if (params.schema !== undefined) {
+        if (params.resume) {
+          return textResult("Cannot combine `schema` with `resume` — a resumed session has no StructuredOutput tool.", true);
+        }
+        const compilation = compileJsonSchema(params.schema, "`schema`");
+        if (!compilation.ok) return textResult(compilation.message, true);
+        structuredOutput = compilation.compiled;
+      }
+
       if (params.resume) {
         const existing = context.manager.getRecord(params.resume);
         if (!ownsRecord(existing, context.parentAgentId)) {
@@ -274,6 +289,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         inheritContext: invocation.inheritContext,
         thinkingLevel: invocation.thinking,
         isolation: invocation.isolation,
+        structuredOutput,
         invocation: {
           thinking: invocation.thinking,
           maxTurns: invocation.maxTurns,
