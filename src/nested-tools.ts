@@ -305,7 +305,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         // walked, not just the immediate parent — a spawn callback only fires for
         // that child's OWN turns, so stopping at one level would hide a
         // great-grandchild from the only record anyone can see. (The live
-        // widget/fleet counters read their own per-agent activity tracker, which
+        // widget counters read their own per-agent activity tracker, which
         // still sees only the top-level agent's own turns.)
         onAssistantUsage: (usage) => {
           for (let id: string | undefined = context.parentAgentId; id !== undefined; ) {

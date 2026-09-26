@@ -148,7 +148,7 @@ function occupiesPoolSlot(
  * Whether a record is one of the session's own agents, rather than something
  * another agent or a workflow owns.
  *
- * The single definition behind every user-facing surface — the fleet list, the
+ * The single definition behind every user-facing surface — the
  * widget, the `/agents` menus, `@handle` resolution, and the completion events
  * and session entries. An owned child reports through its owner, so surfacing
  * it separately would double-count the same work in the places a person reads.

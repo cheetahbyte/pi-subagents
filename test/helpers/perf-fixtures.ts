@@ -6,7 +6,7 @@
  * (`test/perf/ab.mjs`), which copies this file into a worktree of an older
  * commit and runs the same benchmarks there. That last consumer is why the
  * builders here stay structural — plain object literals satisfying the shapes
- * `AgentWidget`, `FleetList` and `ConversationViewer` accept — rather than
+ * `AgentWidget` and `ConversationViewer` accept — rather than
  * importing anything from `src/`. A fixture that reached into production types
  * would stop compiling the moment it travelled to a tree where those types
  * differ, which is exactly the tree the comparison exists to measure.
@@ -44,10 +44,7 @@ export function perfTui(columns = 120, rows = 40) {
 /**
  * A session stub reporting live stats.
  *
- * Both halves are load-bearing. `FleetList.agentRecords()` filters on
- * `a.session`, so a record without one is invisible to the fleet list and the
- * benchmark silently measures an empty bar. And `getSessionContextPercent()`
- * reads `getSessionStats().contextUsage`, which the widget calls once per
+ * `getSessionContextPercent()` reads `getSessionStats().contextUsage`, which the widget calls once per
  * running agent per frame — returning stats rather than throwing is what keeps
  * that call on the path it takes in production instead of its catch branch.
  */
@@ -109,7 +106,7 @@ export function makeFleet(opts: FleetOptions = {}): ReturnType<typeof makeRecord
   return out;
 }
 
-/** Live per-agent activity, keyed by id, as the widget and fleet list expect. */
+/** Live per-agent activity, keyed by id, as the widget expects. */
 export function makeActivity(records: { id: string; toolUses: number }[]): Map<string, any> {
   return new Map(
     records.map(r => [
@@ -227,28 +224,6 @@ export function mountWidget(
     render: (): string[] => (factory ? factory(tui, perfTheme).render() : []),
     update: () => widget.update(),
     dispose: () => widget.dispose?.(),
-  };
-}
-
-/** Drive `FleetList`: same idea, but its widget renders at an explicit width. */
-export function mountFleet(FleetList: any, records: unknown[]) {
-  const fleet = new FleetList(makeManager(records), makeActivity(records as { id: string; toolUses: number }[]));
-  let factory: any;
-  fleet.setUICtx({
-    setWidget: (_key: string, content: any) => { factory = content; },
-    onTerminalInput: () => () => {},
-    getEditorText: () => "",
-    notify: () => {},
-    custom: () => new Promise(() => {}),
-  });
-  fleet.update();
-  const tui = perfTui();
-  factory?.(tui, perfTheme).render(120); // prime, as above
-  return {
-    fleet,
-    render: (width = 120): string[] => (factory ? factory(tui, perfTheme).render(width) : []),
-    update: () => fleet.update(),
-    dispose: () => fleet.dispose?.(),
   };
 }
 

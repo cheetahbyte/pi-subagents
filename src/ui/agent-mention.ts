@@ -50,8 +50,8 @@ import type { AgentRecord, AgentTombstone } from "../types.js";
 /**
  * One thing `@` can address, and what sending to it will do. `typeLabel` is the
  * agent's `display_name`, resolved by the caller: this module stays independent
- * of the type registry, but the popup must agree with FleetView and the widget,
- * which both render the label rather than the raw type.
+ * of the type registry, but the popup must agree with the widget,
+ * which renders the label rather than the raw type.
  */
 export type MentionTarget =
   | { kind: "record"; handle: string; record: AgentRecord; typeLabel: string }

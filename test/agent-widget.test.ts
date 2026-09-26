@@ -148,8 +148,7 @@ describe("AgentWidget", () => {
   });
 
   it("hides a workflow's agents in every coordinator widget mode", () => {
-    // They belong to the run, which reports for them through its own card and
-    // its own row in the fleet list.
+    // They belong to the run, which reports for them through its own card.
     const manager = {
       listAgents: () => [makeRecord("child", { isBackground: true, workflowId: "wf_abc" })],
     };

@@ -364,7 +364,7 @@ const clampIndex = (index: number, length: number) =>
  *
  * Selection is stored raw and clamped on read, so a phase finishing (and its
  * agents dropping out of a filtered view) never leaves the cursor pointing past
- * the end — the same trick `fleet-list.ts` plays, minus the mutation.
+ * the end.
  */
 export function resolveWorkflowDialog(input: WorkflowDialogInput): ResolvedWorkflowDialog {
   const groups = buildPhaseGroups(input.progress, input.meta?.phases);
@@ -430,7 +430,7 @@ function rightAlign(left: WorkflowCardLine, right: WorkflowCardLine, width: numb
 
 /**
  * Window a list around its selection, so a 200-agent fan-out still shows the
- * row you are on. Mirrors `fleet-list.ts`'s arithmetic.
+ * row you are on.
  */
 function windowRange(selected: number, total: number, max: number): { start: number; end: number } {
   const visible = Math.min(max, total);

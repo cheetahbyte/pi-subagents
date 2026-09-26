@@ -241,8 +241,7 @@ describe("/agents → Workflows", () => {
 
     it("opens as a centered overlay, like the conversation viewer beside it", async () => {
       // Not an overlay means inline: the frame renders into the conversation
-      // and stays in the scrollback afterwards, and opening a run from the
-      // fleet list behaves unlike opening the agent row directly above it.
+      // and stays in the scrollback afterwards.
       const { command } = await withRuns(1);
       const ui = commandCtx();
       await command.handler("", ui.context);

@@ -65,14 +65,6 @@ export interface WorkflowTask {
   /** Bumped once per applied batch, so a renderer can tell nothing changed. */
   progressVersion: number;
   agentCount: number;
-  /**
-   * Agents that have settled successfully, recomputed with the other counters.
-   *
-   * Cached rather than derived on read because the fleet list asks five times a
-   * second: deriving it there would walk the whole append-only log on every
-   * tick, which for a thousand-agent run is real work in the render loop.
-   */
-  doneCount: number;
   totalTokens: number;
   totalToolCalls: number;
   logs: string[];
@@ -117,7 +109,6 @@ export function createWorkflowTask(init: {
     workflowProgress: [],
     progressVersion: 0,
     agentCount: 0,
-    doneCount: 0,
     totalTokens: 0,
     totalToolCalls: 0,
     logs: [],
@@ -151,16 +142,12 @@ export function updateWorkflowProgressBatch(
 
   let totalTokens = 0;
   let totalToolCalls = 0;
-  let done = 0;
   for (const agent of agents) {
     totalTokens += agent.tokens ?? 0;
     totalToolCalls += agent.toolCalls ?? 0;
-    // Counted off the collapsed agents, so a re-emitted row counts once.
-    if (agent.state === "done") done++;
   }
   task.totalTokens = totalTokens;
   task.totalToolCalls = totalToolCalls;
-  task.doneCount = done;
 }
 
 /**

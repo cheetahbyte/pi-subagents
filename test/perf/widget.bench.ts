@@ -1,12 +1,10 @@
 /**
- * widget.bench.ts — the two always-on surfaces, `AgentWidget` and `FleetList`.
+ * widget.bench.ts — the always-on surface, `AgentWidget`.
  *
- * Neither caches anything about the agent list. `AgentWidget` scans it twice per
- * cycle — once in `update()`, once again in `renderWidget()` — and each scan is
- * a `listAgents()` copy-and-sort; `FleetList.update()` reaches `agentRecords()`
- * three times, and that is a sort on top of the manager's own sort. Both render
- * on every TUI frame, not just on their own timers, because both sit beside the
- * editor: a keystroke in the main session redraws them.
+ * It caches nothing about the agent list: it scans it twice per cycle — once in
+ * `update()`, once again in `renderWidget()` — and each scan is a `listAgents()`
+ * copy-and-sort. It renders on every TUI frame, not just on its own timer,
+ * because it sits beside the editor: a keystroke in the main session redraws it.
  *
  * `render` and `update` are measured apart because they run at different rates
  * (per frame vs. an 80 ms timer plus ~10 call sites in index.ts) and a
@@ -20,13 +18,12 @@
  */
 import { afterAll, bench, describe } from "vitest";
 import { AgentWidget } from "../../src/ui/agent-widget.js";
-import { FleetList } from "../../src/ui/fleet-list.js";
-import { makeFleet, mountFleet, mountWidget } from "../helpers/perf-fixtures.js";
+import { makeFleet, mountWidget } from "../helpers/perf-fixtures.js";
 
 /** Fleet sizes: one agent, a normal fan-out, and a pathological one. */
 const SIZES = [1, 10, 100];
 
-/** Everything mounted here, torn down once at the end (FleetList holds a timer). */
+/** Everything mounted here, torn down once at the end (the widget holds a timer). */
 const mounted: { dispose: () => void }[] = [];
 function track<T extends { dispose: () => void }>(m: T): T {
   mounted.push(m);
@@ -74,22 +71,4 @@ describe("AgentWidget.render — the widget's real mix", () => {
   bench("3 running / 7 queued / 3 finished — showCost on", () => {
     cost.render();
   });
-});
-
-describe("FleetList.render (per TUI frame, below the editor)", () => {
-  for (const n of SIZES) {
-    const f = track(mountFleet(FleetList, makeFleet({ running: n })));
-    bench(`${n} agents`, () => {
-      f.render(120);
-    });
-  }
-});
-
-describe("FleetList.update (200ms timer)", () => {
-  for (const n of SIZES) {
-    const f = track(mountFleet(FleetList, makeFleet({ running: n })));
-    bench(`${n} agents`, () => {
-      f.update();
-    });
-  }
 });

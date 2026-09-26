@@ -3,7 +3,7 @@
  * frame.
  *
  * These are individually tiny, which is the reason to isolate them: when a
- * widget or fleet-list benchmark moves, this file answers "was it the render or
+ * widget benchmark moves, this file answers "was it the render or
  * something underneath it?" without bisecting. `buildInvocationTags` in
  * particular is called once per running row when `showModel` is on, and
  * `getSessionContextPercent` reaches into the live session on every row

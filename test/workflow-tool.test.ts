@@ -117,7 +117,7 @@ describe("createWorkflowHost — spawn mapping", () => {
     const [, , type, prompt, options] = stub.spawnAndWait.mock.calls[0];
     expect(type).toBe("general-purpose");
     expect(prompt).toBe("do the thing");
-    // The label is the child's display description, so the fleet list and the
+    // The label is the child's display description, so the widget and the
     // workflow tree name the same agent the same way.
     expect(options.description).toBe("review:bugs");
   });
@@ -197,7 +197,7 @@ describe("createWorkflowHost — spawn mapping", () => {
 
   it("stamps its children with the run id and keeps them out of the pool", async () => {
     // Ownership, not decoration: the stamp is what removes a workflow's agents
-    // from the fleet list, the widget and the `/agents` menus, and what keeps
+    // from the widget and the `/agents` menus, and what keeps
     // one fan-out from filling the session's concurrency pool.
     const stub = stubManager();
     const host = createWorkflowHost({
@@ -1053,66 +1053,6 @@ describe("--subagents-workflow-file", () => {
       },
       ...overrides,
     });
-
-  it("claims its fleet row as soon as a run starts, not when it settles", async () => {
-    // The regression this guards: a run's agents are owned by it, so their
-    // lifecycle callbacks no longer refresh the fleet — and nothing else did,
-    // which left a running workflow invisible in FleetView. There is no
-    // below-editor widget to register: the full-screen picker reads the run
-    // registry live at render time, so the row has to be there the moment the
-    // run starts — opening the picker right after `execute` returns shows it.
-    const booted = makePi();
-    subagentsExtension(booted.pi);
-    let built: any;
-    const context = uiCtx({
-      ui: {
-        setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn(),
-        addAutocompleteProvider: vi.fn(),
-        onTerminalInput: vi.fn(() => vi.fn()),
-        getEditorText: () => "",
-        // The workflow inspector's overlay is the extension's own; the picker's
-        // stays open for the test to render. Pending forever: resolving would
-        // run the close flow (pickerClosed) on a bare `undefined` outcome.
-        custom: vi.fn((factory: any) => {
-          built = factory(
-            { requestRender: () => {}, terminal: { columns: 120, rows: 40 } },
-            plainTheme,
-            undefined,
-            () => {},
-          );
-          return new Promise(() => {});
-        }),
-      },
-    });
-    await booted.lifecycle.get("session_start")?.({}, context);
-    const handleKey = context.ui.onTerminalInput.mock.calls[0][0];
-
-    await booted.tools.get("SubagentWorkflow").execute(
-      "tc-fleet",
-      { script: inlineScript },
-      undefined, undefined, ctx({ cwd: hermetic.dir }),
-    );
-
-    // ← at an empty prompt opens the picker, and the run owns a row there
-    // already — before ANY of its agents have started.
-    expect(handleKey("\x1b[D")).toMatchObject({ consume: true });
-    expect(built, "the picker overlay opened").toBeDefined();
-    const rendered = built.render(120).join("\n");
-    expect(rendered).toContain("workflow");
-    expect(rendered).toContain("from-inline");
-  });
-
-  it("captures the UI at session_start, before any tool has executed", () => {
-    // A flag-launched workflow runs from session_start, so a UI captured only
-    // from tool_execution_start would leave it with no widget and no fleet row.
-    const booted = makePi();
-    subagentsExtension(booted.pi);
-    const context = uiCtx();
-
-    booted.lifecycle.get("session_start")?.({}, context);
-
-    expect(context.ui.onTerminalInput, "the fleet list only hooks input once it has a UI").toHaveBeenCalled();
-  });
 
   it("registers the flag at activation but does not read it there", () => {
     const booted = makePi({ [WORKFLOW_FILE_FLAG]: "ignored-at-activation.js" });

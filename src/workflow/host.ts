@@ -62,7 +62,7 @@ export interface WorkflowHostOptions {
    * The run id every child is stamped with.
    *
    * What makes them the workflow's rather than the session's: stamped children
-   * are filtered out of the fleet list, the widget, the `/agents` menus and
+   * are filtered out of the widget, the `/agents` menus and
    * `@handle` resolution, and they take no `maxConcurrent` slot. The run
    * reports for them, and it has its own concurrency cap.
    */
@@ -143,8 +143,8 @@ function toSpawnResult(record: AgentRecord): WorkflowSpawnResult {
       ...(record.structuredRetried ? { structuredRetried: true } : {}),
     };
   }
-  // "stopped" is someone reaching in and stopping this child — /agents, the
-  // fleet list, a workflow abort. That is the same thing the workflows dialog's
+  // "stopped" is someone reaching in and stopping this child — /agents or a
+  // workflow abort. That is the same thing the workflows dialog's
   // skip action means, so it renders as skipped rather than failed.
   if (record.status === "stopped") {
     return { ...common, ok: false, skipped: true, error: record.error ?? "Stopped." };
