@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Less idle work in the agent widget and extension tool scoping.** The widget's 80ms repaint timer now stops once only finished rows remain. The context-percent readout calls `getContextUsage()` instead of computing full session stats every tick. Extension package names are looked up once per subagent instead of on every tool call. The git probes for the environment prompt and worktree setup now run in parallel.
+
+### Refactored
+
+- **Removed duplicated helpers and dead state.** Agent directory paths, the "Choose location" picker, `textResult`, `lineWidth`, the token and thinking-tag formatters, and run/resume event forwarding each exist once now. Also removed: the inline `node:fs` and viewer imports, unused `WorkflowTask` fields (`type`, `logs`, `progressVersion`), the never-set `summary`/`description` card fields, `resolveJoinMode`, `DEFAULT_AGENT_NAMES` and `WORKFLOW_TICK_MS`.
+
 ## [0.20.0] - 2026-09-26
 
 ### Added

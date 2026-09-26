@@ -17,16 +17,16 @@ import { Container, Key, matchesKey, type SettingItem, SettingsList, Spacer, Tex
 import { Type } from "@sinclair/typebox";
 import { abortable } from "./abortable.js";
 import { hasAgentBadge, renderAgentName } from "./agent-color.js";
-import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, locateAgentFile, personalAgentsDir, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.js";
+import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, locateAgentFile, serializeAgentFile } from "./agent-file-toggle.js";
 import { AgentManager, isTopLevelAgent } from "./agent-manager.js";
 import { createAnswerSubagentQuestionTool } from "./agent-question-tools.js";
 import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
 import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getConfig, getFallbackSubagent, isDefaultsDisabled, NO_FALLBACK, registerAgents, resolveSpawnType, resolveType, setDefaultsDisabled, setFallbackSubagent } from "./agent-types.js";
 import { inChildSessionContext } from "./child-context.js";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.js";
-import { loadCustomAgents } from "./custom-agents.js";
+import { loadCustomAgents, personalAgentsDir, projectAgentsDir } from "./custom-agents.js";
 import { GroupJoinManager } from "./group-join.js";
-import { isolationParam, resolveAgentInvocationConfig, resolveJoinMode, schemaParam } from "./invocation-config.js";
+import { isolationParam, resolveAgentInvocationConfig, schemaParam } from "./invocation-config.js";
 import { describeMention, handleBase, isReservedHandle, parseMention, resolveHandleToType, stripAgentPrefix } from "./mention.js";
 import { runMentionClone } from "./mention-clone.js";
 import { describeModel, type ModelRegistry, resolveModel } from "./model-resolver.js";
@@ -58,6 +58,7 @@ import {
   type Theme,
   type UICtx,
 } from "./ui/agent-widget.js";
+import { ConversationViewer, VIEWPORT_HEIGHT_PCT } from "./ui/conversation-viewer.js";
 import { showSchedulesMenu } from "./ui/schedule-menu.js";
 import { selectItem } from "./ui/select-item.js";
 import { renderWorkflowCard, renderWorkflowEntryCard } from "./ui/workflow-card.js";
@@ -440,10 +441,6 @@ export default function (pi: ExtensionAPI) {
    * The viewer's `m` key: set the mode and persist it, so the key and
    * `/agents → Settings` stay one setting rather than two.
    */
-  function chooseViewerMarkdown(mode: ViewerMarkdownMode, ctx: ExtensionCommandContext): void {
-    setViewerMarkdown(mode);
-    persistSettings(ctx, `Viewer markdown set to ${mode}`);
-  }
   const pendingUsage = new PendingUsagePool();
 
   // ---- Cancellable pending notifications ----
@@ -1266,6 +1263,14 @@ export default function (pi: ExtensionAPI) {
   let batchCounter = 0;
 
   /** Finalize the current batch: if 2+ smart-mode agents, register as a group. */
+  function enqueueBatch(id: string, joinMode: JoinMode) {
+    if (joinMode === 'async') return;
+    currentBatchAgents.push({ id, joinMode });
+    // Debounce: parallel tool calls dispatched across several ticks land in one batch
+    if (batchFinalizeTimer) clearTimeout(batchFinalizeTimer);
+    batchFinalizeTimer = setTimeout(finalizeBatch, 100);
+  }
+
   function finalizeBatch() {
     batchFinalizeTimer = undefined;
     const batchAgents = [...currentBatchAgents];
@@ -1318,13 +1323,13 @@ export default function (pi: ExtensionAPI) {
     opts: { outputTranscript: boolean; maxTurns?: number; toolCallId?: string },
   ): Promise<AgentRecord | undefined> {
     const id = existing.id;
-    const joinMode = resolveJoinMode(defaultJoinMode, true);
+    const joinMode = defaultJoinMode;
     // Assigned unconditionally: the completion notification carries this as
     // `<tool-use-id>`, so a mention-resume (which passes none) has to CLEAR the
     // id left by the spawn that created the record. Keeping it would point the
     // orchestrator's new result at a tool call that was answered runs ago.
     existing.toolCallId = opts.toolCallId;
-    if (joinMode) existing.joinMode = joinMode;
+    existing.joinMode = joinMode;
     // Reuse the agent's transcript rather than starting a fresh one: the
     // path is deterministic per agent+session, so writing an initial entry
     // would truncate the previous run's turns (see ensureOutputFile).
@@ -1363,11 +1368,7 @@ export default function (pi: ExtensionAPI) {
     });
     if (!record) return undefined;
 
-    if (joinMode != null && joinMode !== 'async') {
-      currentBatchAgents.push({ id, joinMode });
-      if (batchFinalizeTimer) clearTimeout(batchFinalizeTimer);
-      batchFinalizeTimer = setTimeout(finalizeBatch, 100);
-    }
+    enqueueBatch(id, joinMode);
 
     agentActivity.set(id, bgState);
     // This agent already finished once, so the widget holds a finished-age
@@ -2110,9 +2111,9 @@ Terse command-style prompts produce shallow, generic work.
 
         // Set output file + join mode synchronously after spawn, before the
         // event loop yields — onSessionCreated is async so this is safe.
-        const joinMode = resolveJoinMode(defaultJoinMode, true);
+        const joinMode = defaultJoinMode;
         const record = manager.getRecord(id);
-        if (record && joinMode) {
+        if (record) {
           record.joinMode = joinMode;
           record.toolCallId = toolCallId;
           attachTranscript(record, id);
@@ -2124,16 +2125,7 @@ Terse command-style prompts produce shallow, generic work.
         // call instead of being reported as a subagent that ran (#179).
         await manager.awaitStartup(id);
 
-        if (joinMode == null || joinMode === 'async') {
-          // Foreground/no join mode or explicit async — not part of any batch
-        } else {
-          // smart or group — add to current batch
-          currentBatchAgents.push({ id, joinMode });
-          // Debounce: reset timer on each new agent so parallel tool calls
-          // dispatched across multiple event loop ticks are captured together
-          if (batchFinalizeTimer) clearTimeout(batchFinalizeTimer);
-          batchFinalizeTimer = setTimeout(finalizeBatch, 100);
-        }
+        enqueueBatch(id, joinMode);
 
         agentActivity.set(id, bgState);
         widget.ensureTimer();
@@ -3080,7 +3072,6 @@ Terse command-style prompts produce shallow, generic work.
       return;
     }
 
-    const { ConversationViewer, VIEWPORT_HEIGHT_PCT } = await import("./ui/conversation-viewer.js");
     const session = record.session;
     const activity = agentActivity.get(record.id);
 
@@ -3090,7 +3081,10 @@ Terse command-style prompts produce shallow, generic work.
           if (manager.abort(record.id)) {
             ctx.ui.notify(`Stopped "${record.description}".`, "info");
           }
-        }, keybindings, (message: string) => manager.steer(record.id, message), showCost, getViewerMarkdown, (mode) => chooseViewerMarkdown(mode, ctx));
+        }, keybindings, (message: string) => manager.steer(record.id, message), showCost, getViewerMarkdown, (mode) => {
+          setViewerMarkdown(mode);
+          persistSettings(ctx, `Viewer markdown set to ${mode}`);
+        });
       },
       {
         overlay: true,
@@ -3134,7 +3128,6 @@ Terse command-style prompts produce shallow, generic work.
       const content = readFileSync(file.path, "utf-8");
       const edited = await ctx.ui.editor(`Edit ${name}`, content);
       if (edited !== undefined && edited !== content) {
-        const { writeFileSync } = await import("node:fs");
         writeFileSync(file.path, edited, "utf-8");
         reloadCustomAgents();
         ctx.ui.notify(`Updated ${file.path}`, "info");
@@ -3165,14 +3158,18 @@ Terse command-style prompts produce shallow, generic work.
   }
 
   /** Eject a default agent: write its embedded config as a .md file. */
-  async function ejectAgent(ctx: ExtensionCommandContext, name: string, cfg: AgentConfig) {
+  async function pickAgentsDir(ctx: ExtensionCommandContext): Promise<string | undefined> {
     const location = await ctx.ui.select("Choose location", [
       "Project (.pi/agents/)",
       `Personal (${personalAgentsDir()})`,
     ]);
-    if (!location) return;
+    if (!location) return undefined;
+    return location.startsWith("Project") ? projectAgentsDir() : personalAgentsDir();
+  }
 
-    const targetDir = location.startsWith("Project") ? projectAgentsDir() : personalAgentsDir();
+  async function ejectAgent(ctx: ExtensionCommandContext, name: string, cfg: AgentConfig) {
+    const targetDir = await pickAgentsDir(ctx);
+    if (!targetDir) return;
     mkdirSync(targetDir, { recursive: true });
 
     const targetPath = join(targetDir, `${name}.md`);
@@ -3183,7 +3180,6 @@ Terse command-style prompts produce shallow, generic work.
 
     const content = serializeAgentFile(cfg);
 
-    const { writeFileSync } = await import("node:fs");
     writeFileSync(targetPath, content, "utf-8");
     reloadCustomAgents();
     ctx.ui.notify(`Ejected ${name} to ${targetPath}`, "info");
@@ -3206,7 +3202,6 @@ Terse command-style prompts produce shallow, generic work.
         ctx.ui.notify(`Cannot disable ${name}: ${file.path} has no frontmatter block.`, "error");
         return;
       }
-      const { writeFileSync } = await import("node:fs");
       writeFileSync(file.path, updated, "utf-8");
       reloadCustomAgents();
       ctx.ui.notify(`Disabled ${name} (${file.path})`, "info");
@@ -3214,17 +3209,11 @@ Terse command-style prompts produce shallow, generic work.
     }
 
     // No file (built-in default) — create a stub
-    const location = await ctx.ui.select("Choose location", [
-      "Project (.pi/agents/)",
-      `Personal (${personalAgentsDir()})`,
-    ]);
-    if (!location) return;
-
-    const targetDir = location.startsWith("Project") ? projectAgentsDir() : personalAgentsDir();
+    const targetDir = await pickAgentsDir(ctx);
+    if (!targetDir) return;
     mkdirSync(targetDir, { recursive: true });
 
     const targetPath = join(targetDir, `${name}.md`);
-    const { writeFileSync } = await import("node:fs");
     writeFileSync(targetPath, "---\nenabled: false\n---\n", "utf-8");
     reloadCustomAgents();
     ctx.ui.notify(`Disabled ${name} (${targetPath})`, "info");
@@ -3243,7 +3232,6 @@ Terse command-style prompts produce shallow, generic work.
       ctx.ui.notify(`${name} is not disabled in ${file.path}.`, "info");
       return;
     }
-    const { writeFileSync } = await import("node:fs");
 
     // If the file was just a stub ("---\n---\n"), delete it to restore the built-in default
     if (isEmptyStub(updated)) {
@@ -3258,13 +3246,8 @@ Terse command-style prompts produce shallow, generic work.
   }
 
   async function showCreateWizard(ctx: ExtensionCommandContext) {
-    const location = await ctx.ui.select("Choose location", [
-      "Project (.pi/agents/)",
-      `Personal (${personalAgentsDir()})`,
-    ]);
-    if (!location) return;
-
-    const targetDir = location.startsWith("Project") ? projectAgentsDir() : personalAgentsDir();
+    const targetDir = await pickAgentsDir(ctx);
+    if (!targetDir) return;
 
     const method = await ctx.ui.select("Creation method", [
       "Generate with Claude (recommended)",
@@ -3438,7 +3421,6 @@ Write the file using the write tool. Only write the file, nothing else.`;
       if (!overwrite) return;
     }
 
-    const { writeFileSync } = await import("node:fs");
     writeFileSync(targetPath, content, "utf-8");
     reloadCustomAgents();
     ctx.ui.notify(`Created ${targetPath}`, "info");

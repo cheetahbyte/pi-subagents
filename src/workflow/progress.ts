@@ -390,8 +390,6 @@ export function header(
   task: {
     status: WorkflowRunStatus;
     workflowName?: string;
-    summary?: string;
-    description?: string;
     startTime: number;
     endTime?: number;
     totalPausedMs?: number;
@@ -417,8 +415,8 @@ export function header(
   totalAgents = Math.max(agentCount, totalAgents, doneAgents);
 
   return {
-    name: task.workflowName ?? meta?.name ?? task.summary ?? task.description ?? "workflow",
-    subtext: meta?.description ?? task.description ?? task.summary ?? "",
+    name: task.workflowName ?? meta?.name ?? "workflow",
+    subtext: meta?.description ?? "",
     stats: `${doneAgents}/${totalAgents} ${plural(totalAgents, "agent")} · ${formatDuration(elapsedMs(task, now))}${suffix}`,
   };
 }

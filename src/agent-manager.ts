@@ -1644,10 +1644,8 @@ export class AgentManager {
    * (`childAgentId`) and ones its children asked of it (`parentAgentId`).
    * Idempotent — `settleQuestion` settles each at most once.
    */
-  cancelQuestionsForAgent(agentId: string, reason?: unknown): void {
-    const error =
-      reason instanceof Error ? reason
-      : new Error(reason === undefined ? `Agent "${agentId}" stopped` : String(reason));
+  private cancelQuestionsForAgent(agentId: string): void {
+    const error = new Error(`Agent "${agentId}" stopped`);
     for (const record of [...this.pendingQuestions.values()]) {
       if (record.childAgentId === agentId || record.parentAgentId === agentId) {
         this.settleQuestion(record, "", error);

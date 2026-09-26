@@ -27,8 +27,6 @@ export function workflowRunId(): string {
 }
 
 export interface WorkflowTask {
-  /** Discriminator, alongside Claude Code's `local_agent` / `local_bash`. */
-  type: "local_workflow";
   id: string;
   status: WorkflowRunStatus;
   script: string;
@@ -62,12 +60,9 @@ export interface WorkflowTask {
 
   /** The append-only event log, in emission order. */
   workflowProgress: WorkflowEntry[];
-  /** Bumped once per applied batch, so a renderer can tell nothing changed. */
-  progressVersion: number;
   agentCount: number;
   totalTokens: number;
   totalToolCalls: number;
-  logs: string[];
 
   abortController: AbortController;
   startTime: number;
@@ -93,7 +88,6 @@ export function createWorkflowTask(init: {
   resumedFrom?: string;
 }): WorkflowTask {
   return {
-    type: "local_workflow",
     id: init.id,
     status: "running",
     script: init.script,
@@ -107,11 +101,9 @@ export function createWorkflowTask(init: {
     resumedFrom: init.resumedFrom,
     replayedCount: 0,
     workflowProgress: [],
-    progressVersion: 0,
     agentCount: 0,
     totalTokens: 0,
     totalToolCalls: 0,
-    logs: [],
     abortController: new AbortController(),
     startTime: init.startTime ?? Date.now(),
     totalPausedMs: 0,
@@ -132,10 +124,8 @@ export function updateWorkflowProgressBatch(
 ): void {
   if (entries.length === 0) return;
   task.workflowProgress.push(...entries);
-  task.progressVersion++;
 
-  const { agents, logs } = collapse(task.workflowProgress);
-  task.logs = logs;
+  const { agents } = collapse(task.workflowProgress);
   // `agentCount` is what the runtime has scheduled, which can lead what the log
   // has seen — never let a recompute walk it backwards.
   task.agentCount = Math.max(task.agentCount, agents.length);
@@ -169,7 +159,7 @@ export function resumeWorkflowTask(task: WorkflowTask, now = Date.now()): boolea
   if (task.status !== "paused" || task.control === undefined) return false;
   task.control.resume();
   task.status = "running";
-  task.totalPausedMs = (task.totalPausedMs ?? 0) + Math.max(0, now - (task.pausedAt ?? now));
+  task.totalPausedMs += Math.max(0, now - (task.pausedAt ?? now));
   task.pausedAt = undefined;
   return true;
 }
@@ -179,7 +169,7 @@ export function completeWorkflowTask(task: WorkflowTask, result: WorkflowRunResu
   // Banked before the status moves off "paused": a run that finished while held
   // still spent that time held, and the elapsed figure has to say so.
   if (task.pausedAt !== undefined) {
-    task.totalPausedMs = (task.totalPausedMs ?? 0) + Math.max(0, Date.now() - task.pausedAt);
+    task.totalPausedMs += Math.max(0, Date.now() - task.pausedAt);
     task.pausedAt = undefined;
   }
   // Nothing left to control, and holding the handle would let the dialog offer

@@ -68,6 +68,7 @@ import {
   formatCompactTokens,
   formatModel,
   formatThinking,
+  lineWidth,
   REPLAYED_ANNOTATION,
   styleWorkflowCardLines,
   UNICODE_GLYPHS,
@@ -418,7 +419,6 @@ export function subStatusAnnotations(
   return parts;
 }
 
-const lineWidth = (line: WorkflowCardLine) => line.reduce((sum, s) => sum + visibleWidth(s.text), 0);
 
 /** Place `right` flush to `width`, cutting `left` first so the stats survive. */
 function rightAlign(left: WorkflowCardLine, right: WorkflowCardLine, width: number): WorkflowCardLine {

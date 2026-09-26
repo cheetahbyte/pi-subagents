@@ -34,7 +34,7 @@ export interface AgentQuestionManager {
   getRecord(id: string): { isBackground?: boolean } | undefined;
 }
 
-function textResult(text: string, isError = false) {
+export function textResult(text: string, isError = false) {
   return { content: [{ type: "text" as const, text }], isError, details: {} };
 }
 

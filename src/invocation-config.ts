@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { AgentConfig, IsolationMode, JoinMode, ThinkingLevel } from "./types.js";
+import type { AgentConfig, IsolationMode, ThinkingLevel } from "./types.js";
 
 /**
  * The model-facing `isolation` parameter, shared by the `Agent` tool and the
@@ -136,8 +136,4 @@ export function resolveAgentInvocationConfig(
     isolated: agentConfig?.isolated ?? params.isolated ?? false,
     isolation,
   };
-}
-
-export function resolveJoinMode(defaultJoinMode: JoinMode, runInBackground: boolean): JoinMode | undefined {
-  return runInBackground ? defaultJoinMode : undefined;
 }

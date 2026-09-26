@@ -131,9 +131,11 @@ export class PendingUsagePool {
 /** Minimal shape we read from upstream `getSessionStats()`. */
 export type SessionStatsLike = {
   tokens: { input: number; output: number; cacheWrite: number };
-  contextUsage?: { percent: number | null };
 };
-export type SessionLike = { getSessionStats(): SessionStatsLike };
+export type SessionLike = {
+  getSessionStats(): SessionStatsLike;
+  getContextUsage(): { percent: number | null } | undefined;
+};
 
 /**
  * Session-scoped token count: input + output + cacheWrite as reported by
@@ -162,6 +164,6 @@ export function getSessionTokens(session: SessionLike | undefined): number {
  */
 export function getSessionContextPercent(session: SessionLike | undefined): number | null {
   if (!session) return null;
-  try { return session.getSessionStats().contextUsage?.percent ?? null; }
+  try { return session.getContextUsage()?.percent ?? null; }
   catch { return null; }
 }

@@ -23,6 +23,10 @@ import type { AgentConfig, IsolationMode, MemoryScope, ThinkingLevel } from "./t
  */
 const RESERVED_IN_TYPE = ":";
 
+export const projectAgentsDir = (cwd: string = process.cwd()) => join(cwd, ".pi", "agents");
+export const workspaceAgentsDir = (cwd: string = process.cwd()) => join(cwd, ".agents", "agents");
+export const personalAgentsDir = () => join(getAgentDir(), "agents");
+
 /**
  * Scan for custom agent .md files from multiple locations.
  * Discovery hierarchy (higher priority wins):
@@ -42,14 +46,10 @@ const RESERVED_IN_TYPE = ":";
  * filename clash, and `warnSkippedOverride` reports the substitution.
  */
 export function loadCustomAgents(cwd: string, strict = false): Map<string, AgentConfig> {
-  const globalDir = join(getAgentDir(), "agents");
-  const workspaceProjectDir = join(cwd, ".agents", "agents");
-  const projectDir = join(cwd, ".pi", "agents");
-
   const agents = new Map<string, AgentConfig>();
-  loadFromDir(globalDir, agents, "global", strict);            // lowest priority
-  loadFromDir(workspaceProjectDir, agents, "project", strict); // shared workspace
-  loadFromDir(projectDir, agents, "project", strict);          // highest priority (overwrites)
+  loadFromDir(personalAgentsDir(), agents, "global", strict);       // lowest priority
+  loadFromDir(workspaceAgentsDir(cwd), agents, "project", strict); // shared workspace
+  loadFromDir(projectAgentsDir(cwd), agents, "project", strict);   // highest priority (overwrites)
 
   warnedLastLoad = warnedThisLoad;
   warnedThisLoad = new Set();

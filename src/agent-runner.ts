@@ -264,11 +264,22 @@ export function installExtensionToolScope(
   // selector is present, extension tools become an explicit allowlist — a loaded
   // extension not named by a selector contributes nothing (its handlers still ran),
   // and `ext:foo/bar` narrows `foo` to just `bar`.
+  // inScope runs on every tool call; each name lookup climbs directories reading package.json.
+  const namesByPath = new Map<string, string[]>();
+  const namesOf = (path: string): string[] => {
+    let names = namesByPath.get(path);
+    if (!names) {
+      names = extensionCanonicalNames(path);
+      namesByPath.set(path, names);
+    }
+    return names;
+  };
+
   const inScope = (): Set<string> => {
     const keep = new Set(toolNames.filter((t) => !disallowedSet?.has(t)));
     const optInActive = extNames.size > 0;
     for (const extension of loader.getExtensions().extensions) {
-      const canons = extensionCanonicalNames(extension.path);
+      const canons = namesOf(extension.path);
       if (optInActive && !canons.some((c) => extNames.has(c))) continue;
       // First alias that carries a narrowing set — a user won't narrow one
       // extension under two different names, so first-match is correct.
@@ -604,6 +615,27 @@ function finalTurnError(session: AgentSession, startIndex = 0): string | undefin
  * Wire an AbortSignal to abort a session.
  * Returns a cleanup function to remove the listener.
  */
+type RunEventCallbacks = Pick<RunOptions, "onToolActivity" | "onAssistantUsage" | "onCompaction">;
+
+/** The session events both a run and a resume report to their caller. */
+function forwardRunEvents(event: AgentSessionEvent, options: RunEventCallbacks): void {
+  if (event.type === "tool_execution_start") options.onToolActivity?.({ type: "start", toolName: event.toolName });
+  if (event.type === "tool_execution_end") options.onToolActivity?.({ type: "end", toolName: event.toolName });
+  if (event.type === "message_end" && event.message.role === "assistant") {
+    const u = event.message.usage;
+    if (u) options.onAssistantUsage?.({
+      input: u.input ?? 0,
+      output: u.output ?? 0,
+      cacheWrite: u.cacheWrite ?? 0,
+      cacheRead: u.cacheRead ?? 0,
+      cost: u.cost?.total ?? 0,
+    });
+  }
+  if (event.type === "compaction_end" && !event.aborted && event.result) {
+    options.onCompaction?.({ reason: event.reason, tokensBefore: event.result.tokensBefore });
+  }
+}
+
 function forwardAbortSignal(session: AgentSession, signal?: AbortSignal): () => void {
   if (!signal) return () => {};
   const onAbort = () => session.abort();
@@ -1095,25 +1127,7 @@ export async function runAgent(
       currentMessageText += event.assistantMessageEvent.delta;
       options.onTextDelta?.(event.assistantMessageEvent.delta, currentMessageText);
     }
-    if (event.type === "tool_execution_start") {
-      options.onToolActivity?.({ type: "start", toolName: event.toolName });
-    }
-    if (event.type === "tool_execution_end") {
-      options.onToolActivity?.({ type: "end", toolName: event.toolName });
-    }
-    if (event.type === "message_end" && event.message.role === "assistant") {
-      const u = (event.message as any).usage;
-      if (u) options.onAssistantUsage?.({
-        input: u.input ?? 0,
-        output: u.output ?? 0,
-        cacheWrite: u.cacheWrite ?? 0,
-        cacheRead: u.cacheRead ?? 0,
-        cost: u.cost?.total ?? 0,
-      });
-    }
-    if (event.type === "compaction_end" && !event.aborted && event.result) {
-      options.onCompaction?.({ reason: event.reason, tokensBefore: event.result.tokensBefore });
-    }
+    forwardRunEvents(event, options);
   });
 
   const collector = collectResponseText(session);
@@ -1177,12 +1191,7 @@ export async function runAgent(
 export async function resumeAgent(
   session: AgentSession,
   prompt: string,
-  options: {
-    onToolActivity?: (activity: ToolActivity) => void;
-    onAssistantUsage?: (usage: LifetimeUsage) => void;
-    onCompaction?: (info: { reason: "manual" | "threshold" | "overflow"; tokensBefore: number }) => void;
-    signal?: AbortSignal;
-  } = {},
+  options: RunEventCallbacks & { signal?: AbortSignal } = {},
 ): Promise<{ text: string; failure?: string }> {
   // Boundary for the history fallback: the session already holds prior turns,
   // so only assistant text produced by THIS resume prompt counts as its output
@@ -1192,23 +1201,7 @@ export async function resumeAgent(
   const cleanupAbort = forwardAbortSignal(session, options.signal);
 
   const unsubEvents = (options.onToolActivity || options.onAssistantUsage || options.onCompaction)
-    ? session.subscribe((event: AgentSessionEvent) => {
-        if (event.type === "tool_execution_start") options.onToolActivity?.({ type: "start", toolName: event.toolName });
-        if (event.type === "tool_execution_end") options.onToolActivity?.({ type: "end", toolName: event.toolName });
-        if (event.type === "message_end" && event.message.role === "assistant") {
-          const u = (event.message as any).usage;
-          if (u) options.onAssistantUsage?.({
-            input: u.input ?? 0,
-            output: u.output ?? 0,
-            cacheWrite: u.cacheWrite ?? 0,
-            cacheRead: u.cacheRead ?? 0,
-            cost: u.cost?.total ?? 0,
-          });
-        }
-        if (event.type === "compaction_end" && !event.aborted && event.result) {
-          options.onCompaction?.({ reason: event.reason, tokensBefore: event.result.tokensBefore });
-        }
-      })
+    ? session.subscribe((event: AgentSessionEvent) => forwardRunEvents(event, options))
     : () => {};
 
   try {

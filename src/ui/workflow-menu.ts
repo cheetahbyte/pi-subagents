@@ -14,6 +14,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { AgentRecord } from "../types.js";
 import { pauseWorkflowTask, resumeWorkflowTask, type WorkflowTask } from "../workflow/task.js";
+import { VIEWPORT_HEIGHT_PCT } from "./conversation-viewer.js";
 import { WorkflowDialog } from "./workflow-dialog.js";
 
 /** Everything the menu and the inspector need from the extension around them. */
@@ -40,7 +41,7 @@ export interface WorkflowMenuDeps {
  * hints from the actions it is handed, so the footer advertises exactly what
  * works — see `WorkflowDialogActions`.
  */
-export async function showWorkflowDialog(
+async function showWorkflowDialog(
   ctx: ExtensionCommandContext,
   task: WorkflowTask,
   deps: WorkflowMenuDeps,
@@ -48,7 +49,6 @@ export async function showWorkflowDialog(
   // Overlaid on the same terms as the conversation viewer. Inline, the frame
   // would render into the conversation and stay in the scrollback after it
   // closed.
-  const { VIEWPORT_HEIGHT_PCT } = await import("./conversation-viewer.js");
   /**
    * This dialog's own overlay, so `c` can hide it while the conversation is
    * up. Overlays stack, so the viewer would render *over* it either way —

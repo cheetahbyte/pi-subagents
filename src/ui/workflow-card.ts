@@ -47,13 +47,6 @@ import {
 } from "../workflow/progress.js";
 import type { Theme } from "./agent-widget.js";
 
-/**
- * Header re-render cadence. Claude Code ticks the workflow clock once a second,
- * not at the 80ms spinner cadence — the running glyph is static, so there is
- * nothing to animate faster than the elapsed time changes.
- */
-export const WORKFLOW_TICK_MS = 1000;
-
 /** Widest label column before stats stop being aligned and just follow the label. */
 const LABEL_COLUMN_MAX = 28;
 
@@ -148,8 +141,6 @@ export type WorkflowCardLine = WorkflowCardSegment[];
 export interface WorkflowCardTask {
   status: WorkflowRunStatus;
   workflowName?: string;
-  summary?: string;
-  description?: string;
   startTime: number;
   endTime?: number;
   totalPausedMs?: number;
@@ -214,10 +205,9 @@ export function formatModel(
  * other: an `agent()` that named no model still runs at some level, and a level
  * pi clamped is worth saying so about even when the model is unremarkable.
  */
-export function formatThinking(entry: WorkflowAgentEntry): string | undefined {
-  const { thinking, requestedThinking } = entry;
+export function formatThinking({ thinking, requestedThinking }: { thinking?: string; requestedThinking?: string }): string | undefined {
   if (!thinking) return undefined;
-  return requestedThinking !== undefined && requestedThinking !== thinking
+  return requestedThinking && requestedThinking !== thinking
     ? `thinking: ${thinking} (asked ${requestedThinking})`
     : `thinking: ${thinking}`;
 }
@@ -282,7 +272,7 @@ export function clampLine(line: WorkflowCardLine, width: number): WorkflowCardLi
   return clamped;
 }
 
-const lineWidth = (line: WorkflowCardLine) => line.reduce((sum, s) => sum + visibleWidth(s.text), 0);
+export const lineWidth = (line: WorkflowCardLine) => line.reduce((sum, s) => sum + visibleWidth(s.text), 0);
 
 /**
  * Build the card.

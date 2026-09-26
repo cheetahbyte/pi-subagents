@@ -8,7 +8,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { abortable } from "./abortable.js";
-import { createAnswerSubagentQuestionTool } from "./agent-question-tools.js";
+import { createAnswerSubagentQuestionTool, textResult } from "./agent-question-tools.js";
 import {
   buildAgentRegistry,
   getAgentConfigIn,
@@ -108,10 +108,6 @@ export interface NestedToolContext {
   allowedSubagents: "all" | string[];
   /** Root used for agent/config discovery; may differ from the agent's working directory. */
   configCwd: string;
-}
-
-function textResult(text: string, isError = false) {
-  return { content: [{ type: "text" as const, text }], isError, details: {} };
 }
 
 function ownsRecord(record: AgentRecord | undefined, parentAgentId: string): record is AgentRecord {

@@ -11,6 +11,7 @@ import { type AgentManager, isTopLevelAgent } from "../agent-manager.js";
 import { getConfig } from "../agent-types.js";
 import type { AgentInvocation, SubagentType, WidgetMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, type SessionLike } from "../usage.js";
+import { formatCompactTokens, formatThinking } from "./workflow-card.js";
 
 // ---- Constants ----
 
@@ -100,9 +101,7 @@ export function fgPreservingNestedStyles(theme: Theme, color: string, text: stri
 
 /** Format a token count compactly: "33.8k token", "1.2M token". */
 export function formatTokens(count: number): string {
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M token`;
-  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k token`;
-  return `${count} token`;
+  return `${formatCompactTokens(count)} token`;
 }
 
 /**
@@ -198,12 +197,8 @@ export function buildInvocationTags(
 ): { modelName?: string; modelId?: string; tags: string[] } {
   const tags: string[] = [];
   if (!invocation) return { tags };
-  const { thinking, requestedThinking } = invocation;
-  if (thinking) {
-    tags.push(requestedThinking && requestedThinking !== thinking
-      ? `thinking: ${thinking} (asked ${requestedThinking})`
-      : `thinking: ${thinking}`);
-  }
+  const thinkingTag = formatThinking(invocation);
+  if (thinkingTag) tags.push(thinkingTag);
   if (invocation.isolated) tags.push("isolated");
   if (invocation.isolation === "worktree") tags.push("worktree");
   if (invocation.inheritContext) tags.push("inherit context");
@@ -466,11 +461,9 @@ export class AgentWidget {
       const parts: string[] = [];
       if (this.showModel()) {
         // Leading, and paired: a thinking level means nothing without the model
-        // it applies to. The tag is taken from buildInvocationTags rather than
-        // rebuilt so the "(asked X)" annotation survives.
-        const { modelName, tags } = buildInvocationTags(a.invocation);
-        if (modelName) parts.push(modelName);
-        const thinkingTag = tags.find(tag => tag.startsWith("thinking: "));
+        // it applies to.
+        if (a.invocation?.modelName) parts.push(a.invocation.modelName);
+        const thinkingTag = a.invocation && formatThinking(a.invocation);
         if (thinkingTag) parts.push(thinkingTag);
       }
       if (bg) parts.push(formatTurns(bg.turnCount, bg.maxTurns));
@@ -609,6 +602,8 @@ export class AgentWidget {
       }
       return;
     }
+    // Finished rows are static; onStart re-arms the timer when a run begins.
+    if (!hasActive && this.widgetInterval) { clearInterval(this.widgetInterval); this.widgetInterval = undefined; }
 
     // Status bar — only call setStatus when the text actually changes
     let newStatusText: string | undefined;

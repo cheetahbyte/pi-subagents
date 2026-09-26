@@ -91,13 +91,16 @@ export async function createWorktree(
   let baseSha: string;
   let subdir: string;
   try {
-    await git(pi, cwd, ["rev-parse", "--is-inside-work-tree"], 5000);
-    baseSha = await git(pi, cwd, ["rev-parse", "HEAD"], 5000);
+    let topLevel: string;
+    [, baseSha, topLevel] = await Promise.all([
+      git(pi, cwd, ["rev-parse", "--is-inside-work-tree"], 5000),
+      git(pi, cwd, ["rev-parse", "HEAD"], 5000),
+      git(pi, cwd, ["rev-parse", "--show-toplevel"], 5000),
+    ]);
     // Where cwd sits inside the repo ("" at the root): the agent must work at
     // the same subdirectory inside the copy, or a monorepo-package cwd would
     // silently widen to the whole repo. realpath both sides — git emits
     // resolved paths while cwd may arrive through a symlink (macOS /tmp).
-    const topLevel = await git(pi, cwd, ["rev-parse", "--show-toplevel"], 5000);
     subdir = relative(realpathSync(topLevel), realpathSync(cwd));
   } catch {
     return undefined;

@@ -27,15 +27,10 @@
 
 import { existsSync } from "node:fs";
 import { join, sep } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { parseAgentFrontmatter } from "./custom-agents.js";
+import { parseAgentFrontmatter, personalAgentsDir, projectAgentsDir, workspaceAgentsDir } from "./custom-agents.js";
 import type { AgentConfig } from "./types.js";
 
 export type AgentFileLocation = "project" | "workspace" | "personal";
-
-export const projectAgentsDir = (cwd: string = process.cwd()) => join(cwd, ".pi", "agents");
-export const workspaceAgentsDir = (cwd: string = process.cwd()) => join(cwd, ".agents", "agents");
-export const personalAgentsDir = () => join(getAgentDir(), "agents");
 
 /**
  * Find the file path of a custom agent by name, in discovery-precedence order
