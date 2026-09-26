@@ -32,10 +32,9 @@ const INVOCATION = {
   maxTurns: 60,
 } as any;
 
-/** The disclosure shape: both "(asked …)" annotations live, as #257 renders them. */
+/** The disclosure shape: the thinking "(asked …)" annotation live, as #257 renders it. */
 const INVOCATION_DISCLOSED = {
   ...INVOCATION,
-  requestedModel: "google/gemini-3-pro",
   requestedThinking: "max",
 } as any;
 

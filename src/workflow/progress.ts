@@ -87,13 +87,10 @@ export interface WorkflowAgentEntry {
   /** The level actually in effect, once the child's session reports one. */
   thinking?: string;
   /**
-   * What the call asked for, kept only when it did not get it — pi clamped the
-   * level, or an agent file's frontmatter outranked the option (#182). Rendered
-   * as `(asked max)` beside the effective value rather than silently replacing
-   * it.
+   * The level the call asked for, kept only when pi clamped it. Rendered as
+   * `(asked max)` beside the effective value rather than silently replacing it.
    */
   requestedThinking?: string;
-  requestedModel?: string;
   fallbackModel?: string;
   isolation?: "worktree";
   error?: string;

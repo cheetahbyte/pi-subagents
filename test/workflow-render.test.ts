@@ -189,25 +189,12 @@ describe("tree branches", () => {
   });
 });
 
-// #182 reaches the workflow surfaces: a model or level the call asked for and
-// did not get is disclosed beside the effective one, never silently replaced by
-// it. Same `asked()` rule `buildInvocationTags` applies everywhere else.
+// #182 reaches the workflow surfaces: a level pi clamped is disclosed beside the
+// effective one, never silently replaced by it. Same rule `buildInvocationTags`
+// applies everywhere else.
 describe("effective-vs-requested disclosure", () => {
   it("names the model alone when the request was honoured", () => {
     expect(formatModel(agentEntry({ index: 0, model: "haiku 4.5" }))).toBe("haiku 4.5");
-  });
-
-  it("discloses a model an agent file pinned over the call's", () => {
-    expect(
-      formatModel(agentEntry({ index: 0, model: "haiku 4.5", requestedModel: "opus" })),
-    ).toBe("haiku 4.5 (asked opus)");
-  });
-
-  it("says nothing when the requested model is the one that ran", () => {
-    // Disclosing a request that WAS honoured would be noise on every row.
-    expect(
-      formatModel(agentEntry({ index: 0, model: "haiku 4.5", requestedModel: "haiku 4.5" })),
-    ).toBe("haiku 4.5");
   });
 
   it("discloses a thinking level pi clamped", () => {

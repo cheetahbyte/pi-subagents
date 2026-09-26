@@ -189,27 +189,29 @@ export function getPromptModeLabel(type: SubagentType): string | undefined {
 /**
  * Mode label is not included — callers add it where they want it.
  *
- * Both model forms come back so each surface can pick by width; the
- * "(asked X)" annotation is applied here rather than by callers, so a value the
- * spawn did not honor cannot be rendered as though it had been (#182).
+ * Both model forms come back so each surface can pick by width. The thinking
+ * "(asked X)" annotation is applied here rather than by callers, so a clamped
+ * level cannot be rendered as though it had been honored.
  */
 export function buildInvocationTags(
   invocation: AgentInvocation | undefined,
 ): { modelName?: string; modelId?: string; tags: string[] } {
   const tags: string[] = [];
   if (!invocation) return { tags };
-  const asked = (value: string | undefined, requested: string | undefined): string | undefined =>
-    value && requested && requested !== value ? `${value} (asked ${requested})` : value;
-  const thinking = asked(invocation.thinking, invocation.requestedThinking);
-  if (thinking) tags.push(`thinking: ${thinking}`);
+  const { thinking, requestedThinking } = invocation;
+  if (thinking) {
+    tags.push(requestedThinking && requestedThinking !== thinking
+      ? `thinking: ${thinking} (asked ${requestedThinking})`
+      : `thinking: ${thinking}`);
+  }
   if (invocation.isolated) tags.push("isolated");
   if (invocation.isolation === "worktree") tags.push("worktree");
   if (invocation.inheritContext) tags.push("inherit context");
   if (invocation.runInBackground) tags.push("background");
   if (invocation.maxTurns != null) tags.push(`max turns: ${invocation.maxTurns}`);
   return {
-    modelName: asked(invocation.modelName, invocation.requestedModel),
-    modelId: asked(invocation.modelId, invocation.requestedModel),
+    modelName: invocation.modelName,
+    modelId: invocation.modelId,
     tags,
   };
 }

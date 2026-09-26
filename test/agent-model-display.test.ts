@@ -3,8 +3,8 @@
  * an agent ran with must be the ones it actually ran with.
  *
  * Three ways they used to drift: a subagent that inherited the parent's model
- * showed no model at all, a level pi clamped or an agent file overrode was
- * reported as though it had been honored (#182), and a resume rendered the
+ * showed no model at all, a level pi clamped was reported as though it had
+ * been honored (#182), and a resume rendered the
  * parameters of the call rather than the session it reopened.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -213,10 +213,8 @@ describe("Agent tool result — effective model", () => {
   });
 
   // Asserted on the immediate background result, which renders BEFORE a session
-  // exists. That is the only place the two causes of a mismatch are separable:
-  // a clamp cannot have happened yet, so "(asked max)" here can only come from
-  // the agent file outranking the parameter.
-  it("discloses a level an agent file pinned over the caller's (#182)", async () => {
+  // exists, so no clamp can have changed the level yet.
+  it("lets the caller's level override the agent file's", async () => {
     pinnedAgent("thinking: low\n");
     const tool = agentTool();
     vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}) as never);
@@ -229,10 +227,11 @@ describe("Agent tool result — effective model", () => {
       ctx(),
     );
 
-    expect(result.details.tags).toContain("thinking: low (asked max)");
+    expect(result.details.tags).toContain("thinking: max");
+    expect(result.details.tags.join(" ")).not.toContain("asked");
   });
 
-  it("discloses a model an agent file pinned over the caller's (#182)", async () => {
+  it("lets the caller's model override the agent file's", async () => {
     pinnedAgent("model: anthropic/claude-haiku-4-5\n");
     const tool = agentTool();
     vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}) as never);
@@ -251,13 +250,12 @@ describe("Agent tool result — effective model", () => {
       ctx(),
     );
 
-    expect(result.details.modelName).toBe("haiku 4.5 (asked anthropic/claude-opus-4-6)");
+    expect(result.details.modelName).toBe("opus 4.6");
   });
 
-  it("stays quiet when the caller's spelling names the model that won", async () => {
+  it("stays quiet when the caller's spelling names the pinned model", async () => {
     // Model input is fuzzy: `"haiku"` and `"anthropic/claude-haiku-4-5"` are the
-    // same model, and the frontmatter did not take anything away from the
-    // caller. Comparing the raw strings would print "haiku 4.5 (asked haiku)".
+    // same model, so nothing should print "haiku 4.5 (asked haiku)".
     pinnedAgent("model: anthropic/claude-haiku-4-5\n");
     const tool = agentTool();
     vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}) as never);
@@ -273,7 +271,7 @@ describe("Agent tool result — effective model", () => {
     expect(result.details.modelName).toBe("haiku 4.5");
   });
 
-  it("discloses a spelling that names no available model at all", async () => {
+  it("refuses a caller model that names no available model, even over a pin", async () => {
     pinnedAgent("model: anthropic/claude-haiku-4-5\n");
     const tool = agentTool();
     vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}) as never);
@@ -286,7 +284,7 @@ describe("Agent tool result — effective model", () => {
       ctx(),
     );
 
-    expect(result.details.modelName).toBe("haiku 4.5 (asked gpt-9)");
+    expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining('Model not found: "gpt-9"') });
   });
 
   it("says nothing about a request that was honored", async () => {

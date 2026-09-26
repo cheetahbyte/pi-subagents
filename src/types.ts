@@ -288,15 +288,12 @@ export interface AgentInvocation {
   /** The level actually in effect, once a session exists to report one. */
   thinking?: EffectiveThinkingLevel;
   /**
-   * What the caller asked for, kept only when they did not get it — pi clamped
-   * the level to the model's capabilities, or an agent file's frontmatter
-   * outranked the parameter (#182). The snapshot exists to answer "did the spawn
-   * honor my instructions?" (#62), which it cannot do if the request is lost, so
-   * neither `requested*` field is overwritten once set.
+   * The level the caller asked for, kept only when pi clamped it to the model's
+   * capabilities. The snapshot exists to answer "did the spawn honor my
+   * instructions?" (#62), which it cannot do if the request is lost, so it is
+   * not overwritten once set.
    */
   requestedThinking?: EffectiveThinkingLevel;
-  /** The caller's `model` parameter, as written, when an agent file's pin won. */
-  requestedModel?: string;
   maxTurns?: number;
   isolated?: boolean;
   inheritContext?: boolean;
