@@ -53,6 +53,8 @@ import {
   fauxAssistantMessage,
   fauxText,
   fauxToolCall,
+  getCurrentSystemPrompt,
+  getCurrentTools,
   type Model,
   type ToolCall,
 } from "@earendil-works/pi-ai";
@@ -188,6 +190,24 @@ export function agentCall(
   return fauxToolCall("Agent", { subagent_type: "general-purpose", ...args }, opts);
 }
 
+/**
+ * Tool names the model can call at this point in the transcript. Not
+ * `context.tools`, which is empty by the time a provider sees the context:
+ * `normalizeContext` folds the declarations into the leading system message,
+ * and later system messages add and remove them from there.
+ */
+export function contextToolNames(context: Context): string[] {
+  return getCurrentTools(context.messages).map((tool) => tool.name);
+}
+
+/**
+ * The system prompt in force at this point in the transcript — every system
+ * message replayed in order, not the empty `context.systemPrompt`.
+ */
+export function contextSystemPrompt(context: Context): string {
+  return getCurrentSystemPrompt(context.messages);
+}
+
 function resolveReply(
   reply: FauxReply | ((ctx: Context) => FauxReply),
   ctx: Context,
@@ -210,7 +230,7 @@ export function routeBySession(routes: {
   subagent: FauxReply | ((ctx: Context) => FauxReply);
 }): FauxResponder {
   return (context) => {
-    const isParent = (context.tools ?? []).some((t) => t.name === "Agent");
+    const isParent = contextToolNames(context).includes("Agent");
     if (!isParent) return resolveReply(routes.subagent, context);
     const spawned = context.messages.some(
       (m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "Agent",

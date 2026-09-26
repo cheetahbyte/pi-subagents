@@ -26,6 +26,7 @@ import { loadCustomAgents } from "../src/custom-agents.js";
 import { encodeCwd } from "../src/output-file.js";
 import {
   agentCall,
+  contextToolNames,
   type FauxReply,
   type PrintModeRun,
   runPrintMode,
@@ -115,7 +116,7 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
 
     const respond = (context: Context): FauxReply => {
       const text = firstUserText(context);
-      const names = (context.tools ?? []).map((t) => t.name);
+      const names = contextToolNames(context);
 
       // Leaf: no nested tools (it never opted in) — just answer.
       if (text.includes("Do the leaf work")) {
@@ -204,7 +205,7 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
 
     const respond = async (context: Context): Promise<FauxReply> => {
       const text = firstUserText(context).toLowerCase();
-      const names = (context.tools ?? []).map((t) => t.name);
+      const names = contextToolNames(context);
       const results = toolResultTexts(context);
       const userText = [...context.messages]
         .filter((m) => m.role === "user")

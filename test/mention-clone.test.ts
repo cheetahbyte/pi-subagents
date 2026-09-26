@@ -13,6 +13,7 @@
  * because the caller starts the agent directly on `spawned: false` and a
  * rejection would instead lose the mention entirely.
  */
+import { getCurrentSystemPrompt } from "@earendil-works/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Hoisted: vi.mock's factory is lifted above the imports, so it cannot close
@@ -36,8 +37,16 @@ vi.mock("@earendil-works/pi-coding-agent", async () => {
 import { agentMentionReminder } from "../src/mention.js";
 import { runMentionClone } from "../src/mention-clone.js";
 
-/** One user turn and its reply, as buildSessionContext resolves them. */
+/** The prompt the parent session is really running under. */
+const PARENT_PROMPT = "the live system prompt";
+
+/**
+ * One user turn and its reply, as buildSessionContext resolves them — behind
+ * the leading system message that every Pi transcript starts with, and which
+ * is where the prompt and the parent's tool declarations live.
+ */
 const CONVERSATION = [
+  { role: "system", content: PARENT_PROMPT, toolsAdded: [{ name: "read" }], timestamp: 0 },
   { role: "user", content: [{ type: "text", text: "hi" }] },
   { role: "assistant", content: [{ type: "text", text: "hello" }] },
 ] as any[];
@@ -57,7 +66,10 @@ function mainCtx(overrides: Record<string, unknown> = {}) {
     model: { id: "main-model" },
     thinkingLevel: "high",
     modelRegistry: { runtime: { kind: "runtime" } },
-    getSystemPrompt: vi.fn(() => "the live system prompt"),
+    // Present because the real ExtensionContext has it: an implementation that
+    // went back to copying the prompt by hand would write it onto the clone's
+    // read-only `state.systemPrompt` and throw, which is the point.
+    getSystemPrompt: vi.fn(() => "a prompt nobody should be copying by hand"),
     sessionManager: {
       getEntries: vi.fn(() => [{ type: "message" }] as any[]),
       getLeafId: vi.fn(() => "leaf-1"),
@@ -98,8 +110,25 @@ function visibleTools(opts: any): any[] {
  * that hides its own tool prompts a model with nothing to call.
  */
 function cloneSession(turn?: (tool: any) => Promise<void> | void) {
+  // Pi's own AgentState shape: `messages` is an accessor that copies the array
+  // it is given, and `systemPrompt` is READ-ONLY — replayed from the system
+  // messages in the transcript. Assigning it throws here exactly as it does in
+  // Pi, which is the regression this fake exists to catch.
+  let messages: any[] = [];
   const session = {
-    agent: { state: { systemPrompt: "rebuilt-from-cwd", messages: [] as any[] } },
+    agent: {
+      state: {
+        get systemPrompt() {
+          return getCurrentSystemPrompt(messages);
+        },
+        get messages() {
+          return messages;
+        },
+        set messages(next: any[]) {
+          messages = next.slice();
+        },
+      },
+    },
     prompt: vi.fn(async () => {}),
     dispose: vi.fn(),
   } as any;
@@ -137,10 +166,7 @@ describe("cloning the conversation", () => {
 
     await runMentionClone(opts());
 
-    expect(session.agent.state.messages).toEqual([
-      { role: "user", content: [{ type: "text", text: "hi" }] },
-      { role: "assistant", content: [{ type: "text", text: "hello" }] },
-    ]);
+    expect(session.agent.state.messages).toEqual(CONVERSATION);
   });
 
   it("takes the conversation from memory, never from the session file", async () => {
@@ -193,17 +219,20 @@ describe("cloning the conversation", () => {
 
     expect(result).toEqual({ spawned: true });
     expect(session.agent.state.messages).toEqual([]);
-    expect(session.agent.state.systemPrompt).toBe("the live system prompt");
   });
 
-  it("carries the live system prompt rather than the one it rebuilt", async () => {
-    // createAgentSession derives a prompt from cwd and agentDir. Close, but not
-    // what the user's model is working under — extensions add to it per turn.
+  it("takes its system prompt from the conversation's leading system message", async () => {
+    // `state.systemPrompt` is read-only and replayed from the transcript, so
+    // the parent's own leading system message is what carries the live prompt
+    // into the copy — and being there is also what stops Pi generating a
+    // second one in front of it.
     const session = cloneSession(callsAgent());
 
     await runMentionClone(opts());
 
-    expect(session.agent.state.systemPrompt).toBe("the live system prompt");
+    expect(session.agent.state.messages[0]).toEqual(CONVERSATION[0]);
+    expect(session.agent.state.messages.filter((m: any) => m.role === "system")).toHaveLength(1);
+    expect(session.agent.state.systemPrompt).toContain(PARENT_PROMPT);
   });
 
   it("inherits the parent's model, thinking level and providers", async () => {

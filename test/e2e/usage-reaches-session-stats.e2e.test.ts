@@ -114,22 +114,35 @@ describe("subagent usage reaches the parent session's stats (real pi)", () => {
     }
   });
 
-  it("leaves the context-window percentage alone", async () => {
-    // pi derives context usage from assistant messages only. If that ever
-    // changed, a delegating session would look like it was filling its context
-    // with work that happened somewhere else entirely — and users would compact
-    // for no reason.
-    const session = await realSession();
+  it("keeps the subagent's tokens out of the context-window figure", async () => {
+    // A delegating session must not look like it is filling its own context
+    // with work that happened somewhere else — users would compact for no
+    // reason. pi reads context usage off the transcript and takes token counts
+    // only from assistant messages (`getAssistantUsage`), so the 150k we hang
+    // on a tool result must not reach the percentage: the same result carrying
+    // no usage at all has to produce the same figure.
+    //
+    // Not "the percentage never moves": since 0.87.0 `getContextUsage()`
+    // estimates from the session projection rather than the live agent
+    // transcript, so an appended message counts for its OWN text — which is
+    // right, that text really is in the parent's context.
+    const reporting = await realSession();
+    const silent = await realSession();
     try {
-      const before = session.getSessionStats().contextUsage?.percent ?? null;
-
       const pool = new PendingUsagePool();
       pool.add({ input: 150_000, output: 400, cacheWrite: 100, cost: 1.5 });
-      session.sessionManager.appendMessage(toolResultCarrying(pool.drain()) as any);
+      reporting.sessionManager.appendMessage(toolResultCarrying(pool.drain()) as any);
+      silent.sessionManager.appendMessage(toolResultCarrying(undefined) as any);
 
-      expect(session.getSessionStats().contextUsage?.percent ?? null).toBe(before);
+      const reported = reporting.getSessionStats().contextUsage;
+      expect(reported?.percent ?? null).toBe(silent.getSessionStats().contextUsage?.percent ?? null);
+      // A real figure, and the result's own size rather than what it reports:
+      // 150_000 of the faux model's 200_000 window would be 75%.
+      expect(reported?.tokens).toBeGreaterThan(0);
+      expect(reported?.tokens).toBeLessThan(1000);
     } finally {
-      session.dispose?.();
+      reporting.dispose?.();
+      silent.dispose?.();
     }
   });
 

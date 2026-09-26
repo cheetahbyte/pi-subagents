@@ -75,7 +75,8 @@ import type { SubagentType, ThinkingLevel } from "./types.js";
 
 export interface MentionCloneOptions {
   /** The MAIN session's context — what the spawn is attributed to, and the
-   * source of both the conversation and the live system prompt. */
+   * source of the conversation, whose leading system message carries the
+   * prompt. */
   ctx: ExtensionContext;
   /** Agent type the handle resolved to. */
   type: SubagentType;
@@ -170,16 +171,10 @@ export async function runMentionClone(opts: MentionCloneOptions): Promise<Mentio
     );
     session = created.session;
 
-    // The clone rebuilds a system prompt from cwd and agentDir, which is close
-    // but not the live one — extensions contribute to it per turn. Copy the
-    // real thing, so the copy reasons under the instructions the user's model
-    // is actually working under.
-    const systemPrompt = ctx.getSystemPrompt?.();
-    if (systemPrompt) session.agent.state.systemPrompt = systemPrompt;
-
-    // The conversation itself. Pushed rather than assigned so the array the
-    // session was built around stays the one it goes on using.
-    session.agent.state.messages.push(...conversation.messages);
+    // The conversation, leading system message and all: `systemPrompt` is
+    // read-only and replayed from the transcript, so that message is what
+    // carries the parent's prompt and tool declarations into the copy.
+    session.agent.state.messages = conversation.messages;
 
     // User text first, reminder after — the order Claude Code's attachment
     // renderer produces, where the reminder trails the message it is about.
