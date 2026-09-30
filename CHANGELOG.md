@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **TypeBox packages use the host-provided runtime.** Both TypeBox packages are now wildcard peer dependencies, with development dependencies for local checks. This removes the extension package warning and avoids duplicate runtime modules.
 - **The `SubagentWorkflow` prompt guideline no longer contradicts the tool's opt-in rule.** The system-prompt guideline told the model to start a workflow whenever work had stages or needed verification, while the tool description allowed it only on explicit request. The guideline now requires the same explicit opt-in.
 
 ### Refactored
