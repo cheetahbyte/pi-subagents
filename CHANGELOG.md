@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-09-30
+
 ### Changed
 
 - **Less idle work in the agent widget and extension tool scoping.** The widget's 80ms repaint timer now stops once only finished rows remain. The context-percent readout calls `getContextUsage()` instead of computing full session stats every tick. Extension package names are looked up once per subagent instead of on every tool call. The git probes for the environment prompt and worktree setup now run in parallel.
