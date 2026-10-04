@@ -139,8 +139,8 @@ function formatRecord(record: AgentRecord, position: ResultPosition): string {
   // leads — appended, it would look like part of the child's own output.
   const text = record.structuredJson ?? capResult(record.result?.trim() || record.error?.trim() || "No output.", record.outputFile);
   const note = position === "inline"
-    ? getForegroundOutcomeNote(record.status)
-    : getStatusNote(record.status);
+    ? getForegroundOutcomeNote(record.status, record.timedOut)
+    : getStatusNote(record.status, record.timedOut);
   return note ? `Nested agent${note}.\n\n${text}` : text;
 }
 

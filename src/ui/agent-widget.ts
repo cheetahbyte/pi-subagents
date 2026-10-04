@@ -88,6 +88,8 @@ export interface AgentDetails {
   cost?: number;
   agentId?: string;
   error?: string;
+  /** The "steered"/"aborted" status came from the agent's `timeout`, not its turn limit. */
+  timedOut?: boolean;
 }
 
 // ---- Formatting helpers ----
@@ -368,7 +370,7 @@ export class AgentWidget {
   }
 
   /** Render a finished agent line. */
-  private renderFinishedLine(a: { id: string; type: SubagentType; status: string; description: string; toolUses: number; startedAt: number; completedAt?: number; error?: string; lifetimeUsage?: LifetimeUsage }, theme: Theme): string {
+  private renderFinishedLine(a: { id: string; type: SubagentType; status: string; description: string; toolUses: number; startedAt: number; completedAt?: number; error?: string; timedOut?: boolean; lifetimeUsage?: LifetimeUsage }, theme: Theme): string {
     const modeLabel = getPromptModeLabel(a.type);
     const duration = formatMs((a.completedAt ?? Date.now()) - a.startedAt);
 
@@ -379,7 +381,7 @@ export class AgentWidget {
       statusText = "";
     } else if (a.status === "steered") {
       icon = theme.fg("warning", "✓");
-      statusText = theme.fg("warning", " (turn limit)");
+      statusText = theme.fg("warning", a.timedOut ? " (time limit)" : " (turn limit)");
     } else if (a.status === "stopped") {
       icon = theme.fg("dim", "■");
       statusText = theme.fg("dim", " stopped");

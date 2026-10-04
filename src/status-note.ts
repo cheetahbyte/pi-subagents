@@ -11,6 +11,11 @@
 import { formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
 import type { AgentRecord } from "./types.js";
 
+/** Which limit ended a "steered" or "aborted" run: its `timeout`, or its turn budget. */
+export function limitName(timedOut = false): string {
+  return timedOut ? "time limit" : "turn limit";
+}
+
 /**
  * Explicit parenthetical note for a non-normal terminal outcome, so the parent
  * agent can't mistake partial output for a completed result. Empty string for a
@@ -20,14 +25,15 @@ import type { AgentRecord } from "./types.js";
  * turn limit was hit) — the parent should treat human intervention differently
  * from a budget cutoff.
  */
-export function getStatusNote(status: string): string {
+export function getStatusNote(status: string, timedOut = false): string {
+  const limit = limitName(timedOut);
   switch (status) {
     case "stopped":
       return " (STOPPED BY THE USER before completion — output is partial; the task was NOT finished)";
     case "aborted":
-      return " (aborted — hit the turn limit before completion; output may be incomplete)";
+      return ` (aborted — hit the ${limit} before completion; output may be incomplete)`;
     case "steered":
-      return " (wrapped up at the turn limit — output may be partial)";
+      return ` (wrapped up at the ${limit} — output may be partial)`;
     default:
       return "";
   }
@@ -67,14 +73,15 @@ export function getStatusNote(status: string): string {
  * behavior) and adding an instruction (which can) are not equally safe bets.
  * Don't add either back without a way to measure it.
  */
-export function getForegroundOutcomeNote(status: string): string {
+export function getForegroundOutcomeNote(status: string, timedOut = false): string {
+  const limit = limitName(timedOut);
   switch (status) {
     case "stopped":
       return " (STOPPED BY THE USER — everything the agent produced is above; the task is unfinished)";
     case "aborted":
-      return " (aborted at the turn limit — everything the agent produced is above; the task is unfinished)";
+      return ` (aborted at the ${limit} — everything the agent produced is above; the task is unfinished)`;
     case "steered":
-      return " (wrapped up at the turn limit — everything the agent produced is above; the task may be unfinished)";
+      return ` (wrapped up at the ${limit} — everything the agent produced is above; the task may be unfinished)`;
     default:
       return "";
   }

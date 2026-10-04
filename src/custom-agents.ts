@@ -125,6 +125,7 @@ function loadFromDir(dir: string, agents: Map<string, AgentConfig>, source: "pro
       model: str(fm.model),
       thinking: str(fm.thinking) as ThinkingLevel | undefined,
       maxTurns: nonNegativeInt(fm.max_turns),
+      timeoutMs: parseTimeout(fm.timeout, path),
       persistSession: fm.persist_session != null ? fm.persist_session === true : undefined,
       outputTranscript: fm.output_transcript != null ? fm.output_transcript !== false : undefined,
       sessionDir: str(fm.session_dir),
@@ -224,6 +225,21 @@ function str(val: unknown): string | undefined {
 /** Extract a non-negative integer or undefined. 0 means unlimited for max_turns. */
 function nonNegativeInt(val: unknown): number | undefined {
   return typeof val === "number" && val >= 0 ? val : undefined;
+}
+
+/**
+ * Parse `timeout:` — a duration like "90s", "10m" or "1h", the `schedule`
+ * interval syntax (matched here: importing the scheduler would be a cycle).
+ * Warns on anything else: a limit that is silently dropped reads as one that
+ * is in force.
+ */
+function parseTimeout(val: unknown, path: string): number | undefined {
+  if (val === undefined || val === null) return undefined;
+  const m = String(val).trim().match(/^(\d+)(s|m|h)$/);
+  const ms = m ? Number(m[1]) * { s: 1000, m: 60_000, h: 3_600_000 }[m[2] as "s" | "m" | "h"] : 0;
+  if (ms > 0) return ms;
+  warnIfNew(`Agent file ${path}: timeout "${String(val)}" is not a duration like "90s", "10m" or "1h" — ignoring it.`);
+  return undefined;
 }
 
 /**

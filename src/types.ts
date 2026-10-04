@@ -51,6 +51,8 @@ export interface AgentConfig {
   model?: string;
   thinking?: ThinkingLevel;
   maxTurns?: number;
+  /** Wall-clock run limit from `timeout:`. Told to wrap up when it passes, aborted shortly after. */
+  timeoutMs?: number;
   /** Persist this subagent as a normal pi session instead of keeping it in memory only. */
   persistSession?: boolean;
   /** Write the subagent's .output transcript. Defaults to true; false suppresses only that transcript. */
@@ -171,6 +173,8 @@ export interface AgentRecord {
   status: "queued" | "running" | "completed" | "steered" | "aborted" | "stopped" | "error";
   result?: string;
   error?: string;
+  /** A "steered" or "aborted" status came from the agent's `timeout`, not its turn limit. */
+  timedOut?: boolean;
   toolUses: number;
   startedAt: number;
   completedAt?: number;

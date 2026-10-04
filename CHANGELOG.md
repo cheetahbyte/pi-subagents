@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`timeout` frontmatter field: a wall-clock limit for an agent's run.** `max_turns` cannot end a run that is stuck inside one long tool call. With `timeout: 10m`, the agent is told to wrap up when the time passes and is aborted one minute later (or after the usual grace turns) if it has not finished. Results and status lines say "time limit" instead of "turn limit" for such a run. Off unless set; resumed turns are not limited.
+
 ### Changed
 
 - **Subagent results returned to the caller are capped at 50KB or 2000 lines.** A foreground `Agent` result, a resume, `get_subagent_result` and nested results passed the agent's full prose into the parent's context, whatever its size. A longer result is now cut and ends with a note naming the `.output` transcript that holds the rest. Structured (`schema`) payloads and `verbose` conversation logs are not cut.

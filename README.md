@@ -319,6 +319,7 @@ All fields are optional — sensible defaults for everything.
 | `model` | inherit parent | Model — `provider/modelId` or fuzzy name (`"haiku"`, `"sonnet"`). Resolved tolerantly (`.`/`-` and a trailing date stamp are interchangeable) and falls back to the same model under another provider if the named one doesn't have it |
 | `thinking` | inherit | off, minimal, low, medium, high, xhigh, max — actual availability depends on your pi version and model; pi clamps unsupported levels down |
 | `max_turns` | unlimited | Max agentic turns before graceful shutdown. `0` or omit for unlimited |
+| `timeout` | none | Wall-clock limit for a run, as a duration: `90s`, `10m`, `1h`. See [Time limit](#time-limit) |
 | `persist_session` | `subagents.json` `rememberAgents` (default `true`) | Persist this subagent as a normal pi session instead of keeping the session in memory only; overrides the `rememberAgents` project default in both directions. It records its spawning session as parent, so it nests under it in `/resume`. The subagent's `.output` transcript is still written either way unless `output_transcript: false` |
 | `output_transcript` | `true` (or `subagents.json` `outputTranscript`) | Write this subagent's `.output` transcript; when set, overrides the `subagents.json` `outputTranscript` default. Set `false` to write no transcript file or path. Governs only the transcript — independent of `persist_session`, `isolation: worktree`, and `memory:` |
 | `session_dir` | pi default | Optional session directory when `persist_session: true`; omitted uses pi's normal session location, and relative paths resolve from the agent cwd. A session outside the parent's session directory (this override, or `isolation: worktree`) is listed separately, so it shows as a root instead of nesting |
@@ -590,6 +591,19 @@ Instead of hard-aborting at the turn limit, agents get a graceful shutdown:
 | `steered` | Hit limit, wrapped up in time | `✓` yellow |
 | `aborted` | Grace period exceeded | `✗` red |
 | `stopped` | User-initiated abort | `■` dim |
+
+### Time limit
+
+`max_turns` counts turns, so it cannot end a run that is stuck inside one long tool call. Set `timeout` in an agent's frontmatter to bound the run by the clock as well:
+
+```yaml
+timeout: 10m   # 90s, 10m, 1h
+```
+
+1. At the timeout, the agent gets the same wrap-up steering message.
+2. It is aborted one minute later, or after the usual grace turns, whichever comes first.
+
+The statuses are the same as above (`steered`, `aborted`); results and status lines say "time limit" instead of "turn limit". The clock starts when the run starts, not while it is queued. A value that is not a duration is ignored with a warning. The limit applies to the first run only: a resumed agent has neither a turn nor a time limit. It is a frontmatter field, not an `Agent` tool parameter.
 
 ## Concurrency
 

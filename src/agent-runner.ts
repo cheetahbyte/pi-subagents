@@ -374,6 +374,9 @@ export function setRememberAgents(b: boolean): void { rememberAgents = b; }
 /** Additional turns allowed after the soft limit steer message. */
 let graceTurns = 5;
 
+/** How long an agent past its `timeout` has to wrap up before it is aborted. */
+const TIMEOUT_GRACE_MS = 60_000;
+
 /** Get the grace turns value. */
 export function getGraceTurns(): number { return graceTurns; }
 /** Set the grace turns value (minimum 1). */
@@ -517,10 +520,12 @@ export interface RunOptions {
 export interface RunResult {
   responseText: string;
   session: AgentSession;
-  /** True if the agent was hard-aborted (max_turns + grace exceeded). */
+  /** True if the agent was hard-aborted (grace after its turn or time limit exceeded). */
   aborted: boolean;
-  /** True if the agent was steered to wrap up (hit soft turn limit) but finished in time. */
+  /** True if the agent was steered to wrap up (hit its turn or time limit) but finished in time. */
   steered: boolean;
+  /** True if the agent's `timeout` passed during the run. */
+  timedOut: boolean;
   /**
    * A failure message for the run's FINAL assistant turn, when that turn failed:
    * a provider error (stopReason "error"), or a "length" stop that produced no
@@ -1102,22 +1107,28 @@ export async function runAgent(
   // Track turns for graceful max_turns enforcement
   let turnCount = 0;
   const maxTurns = resolveEffectiveMaxTurns(type, options.maxTurns);
-  let softLimitReached = false;
+  /** The turn at which the agent was told to wrap up, by either limit. */
+  let wrapUpTurn: number | undefined;
   let aborted = false;
+  let timedOut = false;
+  const wrapUp = (limit: "turn" | "time") => {
+    wrapUpTurn = turnCount;
+    session.steer(`You have reached your ${limit} limit. Wrap up immediately — provide your final answer now.`);
+  };
+  const hardAbort = () => {
+    aborted = true;
+    session.abort();
+  };
 
   let currentMessageText = "";
   const unsubTurns = session.subscribe((event: AgentSessionEvent) => {
     if (event.type === "turn_end") {
       turnCount++;
       options.onTurnEnd?.(turnCount);
-      if (maxTurns != null) {
-        if (!softLimitReached && turnCount >= maxTurns) {
-          softLimitReached = true;
-          session.steer("You have reached your turn limit. Wrap up immediately — provide your final answer now.");
-        } else if (softLimitReached && turnCount >= maxTurns + graceTurns) {
-          aborted = true;
-          session.abort();
-        }
+      if (wrapUpTurn !== undefined) {
+        if (turnCount >= wrapUpTurn + graceTurns) hardAbort();
+      } else if (maxTurns != null && turnCount >= maxTurns) {
+        wrapUp("turn");
       }
     }
     if (event.type === "message_start") {
@@ -1146,6 +1157,14 @@ export async function runAgent(
   // on counts as this run's output (a fresh session, so usually 0).
   const startLen = session.messages.length;
   let structuredRetried = false;
+  // The steer only lands between tool calls, so a hung tool is ended by the
+  // second timer rather than by grace turns that never come.
+  let timeoutGrace: ReturnType<typeof setTimeout> | undefined;
+  const timeout = agentConfig?.timeoutMs === undefined ? undefined : setTimeout(() => {
+    timedOut = true;
+    if (wrapUpTurn === undefined) wrapUp("time");
+    timeoutGrace = setTimeout(hardAbort, TIMEOUT_GRACE_MS);
+  }, agentConfig.timeoutMs);
   try {
     await session.prompt(effectivePrompt);
 
@@ -1160,6 +1179,8 @@ export async function runAgent(
       await session.prompt(structuredRetryPrompt(structuredCapture));
     }
   } finally {
+    clearTimeout(timeout);
+    clearTimeout(timeoutGrace);
     unsubTurns();
     collector.unsubscribe();
     cleanupAbort();
@@ -1178,7 +1199,8 @@ export async function runAgent(
     responseText,
     session,
     aborted,
-    steered: softLimitReached,
+    steered: wrapUpTurn !== undefined,
+    timedOut,
     failure: finalTurnError(session, startLen) ?? structuredFailure,
     ...(structuredCapture?.json !== undefined ? { structuredJson: structuredCapture.json } : {}),
     ...(structuredRetried ? { structuredRetried } : {}),
