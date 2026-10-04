@@ -500,6 +500,8 @@ Check status and retrieve results from a background agent.
 
 An agent spawned with a `schema` returns its validated JSON payload here; every other agent returns its prose result.
 
+A prose result is cut at pi's tool-output limits (50KB or 2000 lines, whichever comes first) and ends with a note giving the sizes and the path of the agent's `.output` transcript, which holds the full text. The same cap applies to a foreground `Agent` result, a resume, and nested results. A `schema` payload and the `verbose` conversation log are not cut.
+
 Cancelling a `wait: true` call (for example, with `Esc`) stops only the wait. The background agent keeps running, and its completion notification still arrives normally.
 
 ### `steer_subagent`

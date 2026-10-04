@@ -38,7 +38,7 @@ import { SubagentScheduler } from "./schedule.js";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.js";
 import { applyAndEmitLoaded, loadSettings, type SettingsAppliers, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
 import { isSkillInstalled } from "./skill-loader.js";
-import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
+import { capResult, getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
 import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentQuestionDetails, type AgentRecord, type JoinMode, type NotificationDetails, type SubagentType, type ViewerMarkdownMode, type WidgetMode } from "./types.js";
 import { createMentionProvider, mentionRoster, type TypeInfo } from "./ui/agent-mention.js";
 import {
@@ -2082,7 +2082,7 @@ Terse command-style prompts produce shallow, generic work.
           return textResult(`Agent failed: ${record.error}${partialOutputSuffix(record)}`, buildDetails(detailBaseFor(record), record));
         }
         return textResult(
-          record.result?.trim() || "No output.",
+          capResult(record.result?.trim() || "No output.", record.outputFile),
           buildDetails(detailBaseFor(record), record),
         );
       }
@@ -2305,7 +2305,7 @@ Terse command-style prompts produce shallow, generic work.
       }
       return textResult(
         `${fallbackNote}Agent completed in ${formatMs(durationMs)} (${statsParts.join(", ")})${getForegroundOutcomeNote(record.status)}.\n\n` +
-        (record.structuredJson ?? (record.result?.trim() || "No output.")),
+        (record.structuredJson ?? capResult(record.result?.trim() || "No output.", record.outputFile)),
         details,
       );
     },
@@ -2813,7 +2813,7 @@ Terse command-style prompts produce shallow, generic work.
       } else if (record.status === "error") {
         output += `Error: ${record.error}${partialOutputSuffix(record)}`;
       } else {
-        output += record.structuredJson ?? (record.result?.trim() || "No output.");
+        output += record.structuredJson ?? capResult(record.result?.trim() || "No output.", record.outputFile);
       }
 
       // Mark result as consumed — suppresses the completion notification

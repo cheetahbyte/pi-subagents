@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Subagent results returned to the caller are capped at 50KB or 2000 lines.** A foreground `Agent` result, a resume, `get_subagent_result` and nested results passed the agent's full prose into the parent's context, whatever its size. A longer result is now cut and ends with a note naming the `.output` transcript that holds the rest. Structured (`schema`) payloads and `verbose` conversation logs are not cut.
+
 ### Security
 
 - **Project-local subagent files are ignored in projects pi does not trust.** `.pi/agents/`, `.agents/agents/`, `.pi/subagents.json`, saved workflows, project skills used for preloading, `.pi/agent-tool-description.md` and the project `enabledModels` were read regardless of pi's trust decision. They are now skipped when `ctx.isProjectTrusted()` is false; global files still apply. A project with none of pi's own trust-requiring resources counts as trusted, so one that ships only `.pi/agents/` loads as before. See [Project trust](README.md#project-trust).

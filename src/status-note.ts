@@ -8,6 +8,7 @@
  * through agent-runner).
  */
 
+import { formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
 import type { AgentRecord } from "./types.js";
 
 /**
@@ -86,5 +87,20 @@ export function getForegroundOutcomeNote(status: string): string {
  */
 export function partialOutputSuffix(record: AgentRecord): string {
   const partial = record.result?.trim();
-  return partial ? `\n\nPartial output before the failure:\n${partial}` : "";
+  return partial ? `\n\nPartial output before the failure:\n${capResult(partial, record.outputFile)}` : "";
+}
+
+/**
+ * Bound an agent's prose result before it enters the caller's context, and say
+ * so. pi leaves truncation to each tool; these are its limits (50KB / 2000
+ * lines). The note names the transcript, never `get_subagent_result` — a
+ * foreground caller holds no agent id to call it with (#174).
+ */
+export function capResult(text: string, outputFile?: string): string {
+  const truncation = truncateHead(text);
+  if (!truncation.truncated) return text;
+  // truncateHead keeps whole lines only, so one oversized line leaves nothing.
+  const kept = truncation.firstLineExceedsLimit ? text.slice(0, truncation.maxBytes) : truncation.content;
+  const where = outputFile ? ` Full transcript: ${outputFile}` : "";
+  return `${kept}\n\n[Result truncated: ${formatSize(Buffer.byteLength(kept))} of ${formatSize(truncation.totalBytes)}.${where}]`;
 }
