@@ -57,6 +57,7 @@ function ctx() {
     modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
     sessionManager: { getSessionId: vi.fn(() => "s1"), getBranch: vi.fn(() => []) },
     getSystemPrompt: vi.fn(() => "parent"),
+    isProjectTrusted: () => true,
   } as any;
 }
 

@@ -30,6 +30,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ModelEntry } from "./model-resolver.js";
+import { isProjectTrusted } from "./project-trust.js";
 
 /** Minimal registry shape — only the methods resolveEnabledModels actually calls. */
 export interface ModelRegistryRef {
@@ -58,14 +59,14 @@ function readField(path: string): string[] | undefined {
 }
 
 /**
- * Read enabledModels from pi's settings — project-local overrides global.
+ * Read enabledModels from pi's settings — project-local (trusted projects only) overrides global.
  * Mirrors pi's SettingsManager deep-merge for the `enabledModels` field
  * (and matches our own loadSettings precedence in src/settings.ts).
  * Returns undefined when neither file has the field.
  */
 export function readEnabledModels(cwd: string): string[] | undefined {
   const [project, global] = settingsPaths(cwd);
-  return readField(project) ?? readField(global);
+  return (isProjectTrusted() ? readField(project) : undefined) ?? readField(global);
 }
 
 /**

@@ -24,6 +24,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { isSymlink, isUnsafeName, safeReadFile } from "./memory.js";
+import { isProjectTrusted } from "./project-trust.js";
 
 export interface PreloadedSkill {
   name: string;
@@ -52,9 +53,12 @@ function loadSkillContent(name: string, cwd: string): string {
 }
 
 function skillRoots(cwd: string): string[] {
-  return [
+  const projectRoots = [
     join(cwd, ".pi", "skills"), // project — Pi standard
     join(cwd, ".agents", "skills"), // project — Agent Skills spec
+  ];
+  return [
+    ...(isProjectTrusted() ? projectRoots : []),
     join(getAgentDir(), "skills"), // user — Pi standard
     join(homedir(), ".agents", "skills"), // user — Agent Skills spec
     join(homedir(), ".pi", "skills"), // legacy global, pre-Pi

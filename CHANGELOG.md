@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Project-local subagent files are ignored in projects pi does not trust.** `.pi/agents/`, `.agents/agents/`, `.pi/subagents.json`, saved workflows, project skills used for preloading, `.pi/agent-tool-description.md` and the project `enabledModels` were read regardless of pi's trust decision. They are now skipped when `ctx.isProjectTrusted()` is false; global files still apply. A project with none of pi's own trust-requiring resources counts as trusted, so one that ships only `.pi/agents/` loads as before. See [Project trust](README.md#project-trust).
+
 ## [0.20.1] - 2026-09-30
 
 ### Changed

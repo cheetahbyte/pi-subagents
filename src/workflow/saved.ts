@@ -41,17 +41,17 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { isSymlink, isUnsafeName, safeReadFile } from "../memory.js";
+import { isProjectTrusted } from "../project-trust.js";
 import { hasMetaDeclaration } from "./meta.js";
 import { MAX_SCRIPT_LENGTH } from "./runtime.js";
 
 /** Extension a saved workflow file carries. */
 const WORKFLOW_EXTENSION = ".js";
 
-/** The roots a `name` is looked up in, highest priority first. */
+/** The roots a `name` is looked up in, highest priority first. Project roots need a trusted project. */
 export function savedWorkflowRoots(cwd: string): string[] {
   return [
-    join(cwd, ".pi", "workflows"),
-    join(cwd, ".agents", "workflows"),
+    ...(isProjectTrusted() ? [join(cwd, ".pi", "workflows"), join(cwd, ".agents", "workflows")] : []),
     join(getAgentDir(), "workflows"),
   ];
 }

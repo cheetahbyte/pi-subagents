@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { NO_FALLBACK } from "./agent-types.js";
+import { isProjectTrusted } from "./project-trust.js";
 import type { AgentMentionMode, JoinMode, ViewerMarkdownMode, WidgetMode } from "./types.js";
 
 export interface SubagentsSettings {
@@ -477,9 +478,9 @@ function readSettingsFile(path: string): SubagentsSettings {
   }
 }
 
-/** Load merged settings: global provides defaults, project overrides. */
+/** Load merged settings: global provides defaults, a trusted project overrides. */
 export function loadSettings(cwd: string = process.cwd()): SubagentsSettings {
-  return { ...readSettingsFile(globalPath()), ...readSettingsFile(projectPath(cwd)) };
+  return { ...readSettingsFile(globalPath()), ...(isProjectTrusted() ? readSettingsFile(projectPath(cwd)) : {}) };
 }
 
 /**

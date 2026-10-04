@@ -6,6 +6,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { BUILTIN_TOOL_NAMES } from "./agent-types.js";
+import { isProjectTrusted } from "./project-trust.js";
 import type { AgentConfig, IsolationMode, MemoryScope, ThinkingLevel } from "./types.js";
 
 /**
@@ -38,6 +39,7 @@ export const personalAgentsDir = () => join(getAgentDir(), "agents");
  * between the two project locations, .pi/agents wins — .pi stays the project
  * authority; .agents/agents is an additional read location.
  * Any name is allowed — names matching defaults (e.g. "Explore") override them.
+ * Both project locations are skipped while the project is untrusted.
  *
  * An agent's type comes from its frontmatter `name:`, falling back to the
  * filename — Claude Code's rule, where "the filename doesn't have to match".
@@ -48,8 +50,10 @@ export const personalAgentsDir = () => join(getAgentDir(), "agents");
 export function loadCustomAgents(cwd: string, strict = false): Map<string, AgentConfig> {
   const agents = new Map<string, AgentConfig>();
   loadFromDir(personalAgentsDir(), agents, "global", strict);       // lowest priority
-  loadFromDir(workspaceAgentsDir(cwd), agents, "project", strict); // shared workspace
-  loadFromDir(projectAgentsDir(cwd), agents, "project", strict);   // highest priority (overwrites)
+  if (isProjectTrusted()) {
+    loadFromDir(workspaceAgentsDir(cwd), agents, "project", strict); // shared workspace
+    loadFromDir(projectAgentsDir(cwd), agents, "project", strict);   // highest priority (overwrites)
+  }
 
   warnedLastLoad = warnedThisLoad;
   warnedThisLoad = new Set();

@@ -12,7 +12,7 @@
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir, getSettingsListTheme, hasTrustRequiringProjectResources, ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { Container, Key, matchesKey, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { abortable } from "./abortable.js";
@@ -33,9 +33,10 @@ import { describeModel, type ModelRegistry, resolveModel } from "./model-resolve
 import { checkModelScope, isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.js";
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
 import { createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
+import { isProjectTrusted, setProjectTrusted } from "./project-trust.js";
 import { SubagentScheduler } from "./schedule.js";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.js";
-import { applyAndEmitLoaded, loadSettings, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
+import { applyAndEmitLoaded, loadSettings, type SettingsAppliers, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
 import { isSkillInstalled } from "./skill-loader.js";
 import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
 import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentQuestionDetails, type AgentRecord, type JoinMode, type NotificationDetails, type SubagentType, type ViewerMarkdownMode, type WidgetMode } from "./types.js";
@@ -392,6 +393,13 @@ export default function (pi: ExtensionAPI) {
       `Run a workflow script at startup: --${WORKFLOW_FILE_FLAG}=<path>. ` +
       "Use the `=` form — the space form consumes the next argument, which would swallow a following prompt.",
   });
+
+  // No ExtensionContext exists yet, so this is pi's own pre-session rule
+  // (auto-trusted without trust-requiring resources, else the saved decision).
+  // `session_start` replaces it with the session's actual answer.
+  setProjectTrusted(
+    !hasTrustRequiringProjectResources(process.cwd()) || new ProjectTrustStore(getAgentDir()).get(process.cwd()) === true,
+  );
 
   // Read directly rather than waiting for applyAndEmitLoaded below: this decides
   // the initial load, which happens hundreds of lines before settings are applied.
@@ -826,6 +834,14 @@ export default function (pi: ExtensionAPI) {
     currentCtx = ctx;
     if (ctx.hasUI) {
       widget.setUICtx(ctx.ui);
+    }
+    // Trust decided for this session only (a prompt answer, `--approve`,
+    // `defaultProjectTrust`) is invisible at activation. What was read once at
+    // registration (tool descriptions, the schedule param) keeps that state.
+    if (ctx.isProjectTrusted() !== isProjectTrusted()) {
+      setProjectTrusted(ctx.isProjectTrusted());
+      if (isProjectTrusted()) applyAndEmitLoaded(settingsAppliers, (event, payload) => pi.events.emit(event, payload));
+      reloadCustomAgents();
     }
     manager.clearCompleted(true);
     // Guard mirrors the `!scheduler.isActive()` pattern below: session_start
@@ -1434,34 +1450,32 @@ export default function (pi: ExtensionAPI) {
   // Apply persisted settings on startup and emit `subagents:settings_loaded`.
   // Global + project merged; missing → defaults; corrupt file emits a warning
   // to stderr and falls back to defaults.
-  applyAndEmitLoaded(
-    {
-      setMaxConcurrent: (n) => manager.setMaxConcurrent(n),
-      setMaxConcurrentForeground: (n) => manager.setMaxConcurrentForeground(n),
-      setDefaultMaxTurns,
-      setGraceTurns,
-      setDefaultJoinMode,
-      setBackgroundByDefault,
-      setSchedulingEnabled,
-      setScopeModels: setScopeModelsEnabled,
-      setStrictAgentFiles: (b) => { strictAgentFiles = b; },
-      setDisableDefaultAgents: setDisableDefaultAgents,
-      setToolDescriptionMode: setToolDescriptionMode,
-      setAgentMentions: setAgentMentionMode,
-      setRememberAgents,
-      setWidgetMode: setWidgetMode,
-      setOutputTranscript: setOutputTranscriptDefault,
-      setWorktreeIsolation: setWorktreeIsolationEnabled,
-      setWorkflowsEnabled: setWorkflowsEnabled,
-      setMaxSubagentDepth: setMaxSubagentDepth,
-      setFallbackSubagent: setFallbackSubagent,
-      setReportUsage,
-      setShowCost,
-      setShowModel,
-      setViewerMarkdown,
-    },
-    (event, payload) => pi.events.emit(event, payload),
-  );
+  const settingsAppliers: SettingsAppliers = {
+    setMaxConcurrent: (n) => manager.setMaxConcurrent(n),
+    setMaxConcurrentForeground: (n) => manager.setMaxConcurrentForeground(n),
+    setDefaultMaxTurns,
+    setGraceTurns,
+    setDefaultJoinMode,
+    setBackgroundByDefault,
+    setSchedulingEnabled,
+    setScopeModels: setScopeModelsEnabled,
+    setStrictAgentFiles: (b) => { strictAgentFiles = b; },
+    setDisableDefaultAgents: setDisableDefaultAgents,
+    setToolDescriptionMode: setToolDescriptionMode,
+    setAgentMentions: setAgentMentionMode,
+    setRememberAgents,
+    setWidgetMode: setWidgetMode,
+    setOutputTranscript: setOutputTranscriptDefault,
+    setWorktreeIsolation: setWorktreeIsolationEnabled,
+    setWorkflowsEnabled: setWorkflowsEnabled,
+    setMaxSubagentDepth: setMaxSubagentDepth,
+    setFallbackSubagent: setFallbackSubagent,
+    setReportUsage,
+    setShowCost,
+    setShowModel,
+    setViewerMarkdown,
+  };
+  applyAndEmitLoaded(settingsAppliers, (event, payload) => pi.events.emit(event, payload));
 
   // ---- Agent tool ----
 
@@ -1592,7 +1606,7 @@ Terse command-style prompts produce shallow, generic work.
 
   const loadCustomToolDescription = (): string | undefined => {
     for (const path of [
-      join(process.cwd(), ".pi", "agent-tool-description.md"),
+      ...(isProjectTrusted() ? [join(process.cwd(), ".pi", "agent-tool-description.md")] : []),
       join(getAgentDir(), "agent-tool-description.md"),
     ]) {
       try {

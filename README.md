@@ -256,6 +256,22 @@ Project-level agents override global ones with the same name, so you can customi
 
 An unreadable or unparseable agent file is skipped, not fatal — a warning names the file and the error. If it was overriding a same-named agent, a second line names the file that loads instead. Set `strictAgentFiles: true` in `subagents.json` (or `/agents → Settings → Strict agent files`) to fail startup on a broken file instead; mid-session reloads still only warn.
 
+### Project trust
+
+Project-local files are read only when pi trusts the project (`ctx.isProjectTrusted()`, see pi's [security docs](https://github.com/earendil-works/pi/blob/HEAD/packages/coding-agent/docs/security.md)). In an untrusted project the extension ignores:
+
+- `.pi/agents/` and `.agents/agents/`
+- `.pi/subagents.json`
+- `.pi/workflows/` and `.agents/workflows/`
+- `.pi/skills/` and `.agents/skills/` for [skill preloading](#skill-preloading)
+- `.pi/agent-tool-description.md`
+- `enabledModels` in `.pi/settings.json` for [Model Scope](#model-scope)
+
+Global files in `~/.pi/agent/` always apply. Two limits:
+
+- pi only asks about trust when a project has one of its own trust-requiring resources (`.pi/settings.json`, `.pi/extensions`, `.pi/skills`, `.pi/prompts`, `.pi/themes`, `.pi/SYSTEM.md`, `.pi/APPEND_SYSTEM.md`, `.agents/skills`). A project that has none of them counts as trusted, so a repository that ships only `.pi/agents/` is still loaded without a prompt.
+- Before the session starts, the extension only sees a saved trust decision. Trust that applies to one session (a prompt answer that is not saved, `--approve`, `defaultProjectTrust: "always"`) takes effect at session start: project agents and settings load then, but what is fixed at tool registration (the `Agent` tool description and its agent list, the `schedule` parameter, whether `SubagentWorkflow` is registered) stays as the global settings left it. Save the decision with `/trust` and restart to get all of it.
+
 ### Example: `.pi/agents/auditor.md`
 
 ```markdown
@@ -632,7 +648,7 @@ Runtime tuning values set via `/agents` → Settings (max concurrency, max foreg
 - **Global:** `~/.pi/agent/subagents.json` — your machine-wide defaults. Edit by hand; the `/agents` menu never writes here.
 - **Project:** `<cwd>/.pi/subagents.json` — per-project overrides. Written by `/agents` → Settings.
 
-**Precedence:** project overrides global on any field present in both. Missing fields fall back to the hardcoded defaults (max concurrency `10`, max foreground concurrency `0` = unlimited, default max turns unlimited, grace turns `5`, nested depth `2`, join mode `smart`, defaults enabled).
+**Precedence:** project overrides global on any field present in both. The project file is ignored in an [untrusted project](#project-trust). Missing fields fall back to the hardcoded defaults (max concurrency `10`, max foreground concurrency `0` = unlimited, default max turns unlimited, grace turns `5`, nested depth `2`, join mode `smart`, defaults enabled).
 
 **Nested depth** (`maxSubagentDepth`, default `2`): the hard ceiling on [nested delegation](#nested-subagents), counted from the main session (main = 0, its subagents = 1). `0` or `1` disables nesting project-wide regardless of any agent's `allowed_subagents`. Read when a subagent session is built, so a change applies to agents started after it.
 
@@ -996,6 +1012,7 @@ src/
   output-file.ts      # Streaming output file transcripts for agent sessions
   worktree.ts         # Git worktree isolation (create, cleanup, prune)
   prompts.ts          # Config-driven system prompt builder
+  project-trust.ts    # Whether project-local files may be read (mirrors pi's project trust)
   context.ts          # Parent conversation context for inherit_context
   settings.ts         # Persistent settings (~/.pi/agent/subagents.json + .pi/subagents.json)
   env.ts              # Environment detection (git, platform)

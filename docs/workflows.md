@@ -120,7 +120,7 @@ A script you will run more than once belongs somewhere durable. Copy it out of t
 | `<project>/.agents/workflows/<name>.js` | This project, in the tool-agnostic directory |
 | `<agent dir>/workflows/<name>.js` | You, everywhere — follows you across projects |
 
-First hit wins, in that order, so a project file shadows a same-named global one.
+First hit wins, in that order, so a project file shadows a same-named global one. The two project locations are skipped in a project pi does not trust (see [Project trust](../README.md#project-trust)).
 
 The file must carry an `export const meta = { name, description }` declaration. Those are ordinary directories that may hold anything, so that declaration is what marks a file as a workflow — name something else and you are told it is not a workflow rather than getting a parse error from halfway through it. Nothing in the file is executed to decide that.
 
