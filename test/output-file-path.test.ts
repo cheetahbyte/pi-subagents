@@ -23,7 +23,7 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, tmpdir: () => fakeTmp.dir || actual.tmpdir() };
 });
 
-import { createOutputFilePath } from "../src/output-file.js";
+import { createOutputFilePath } from "../src/output-file.ts";
 
 const UID = process.getuid?.() ?? 0;
 const AGENT = "agent-xyz";

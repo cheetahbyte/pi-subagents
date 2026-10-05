@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { inChildSessionContext, runInChildSessionContext } from "../src/child-context.js";
-import subagentsExtension from "../src/index.js";
+import { inChildSessionContext, runInChildSessionContext } from "../src/child-context.ts";
+import subagentsExtension from "../src/index.ts";
 
 describe("child session async context", () => {
   it("is scoped to the child async branch", async () => {

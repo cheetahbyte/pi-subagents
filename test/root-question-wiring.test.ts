@@ -12,16 +12,16 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/agent-runner.js", async () => {
-  const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
+vi.mock("../src/agent-runner.ts", async () => {
+  const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
   return { ...actual, runAgent: vi.fn() };
 });
 
-import { type AgentQuestionManager, createAskParentTool } from "../src/agent-question-tools.js";
-import type { RunResult } from "../src/agent-runner.js";
-import { runAgent } from "../src/agent-runner.js";
-import subagentsExtension from "../src/index.js";
-import { ctx, flush, makePi, textOf } from "./helpers/boot-extension.js";
+import { type AgentQuestionManager, createAskParentTool } from "../src/agent-question-tools.ts";
+import type { RunResult } from "../src/agent-runner.ts";
+import { runAgent } from "../src/agent-runner.ts";
+import subagentsExtension from "../src/index.ts";
+import { ctx, flush, makePi, textOf } from "./helpers/boot-extension.ts";
 
 afterEach(() => {
   vi.mocked(runAgent).mockReset();

@@ -32,8 +32,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { extractMeta, hasMetaDeclaration, WorkflowMetaError } from "../src/workflow/meta.js";
-import { runWorkflow, type WorkflowHost, type WorkflowSpawnRequest } from "../src/workflow/runtime.js";
+import { extractMeta, hasMetaDeclaration, WorkflowMetaError } from "../src/workflow/meta.ts";
+import { runWorkflow, type WorkflowHost, type WorkflowSpawnRequest } from "../src/workflow/runtime.ts";
 
 const EXAMPLES_DIR = fileURLToPath(new URL("../examples/workflows", import.meta.url));
 const LIB_DIR = join(EXAMPLES_DIR, "lib");

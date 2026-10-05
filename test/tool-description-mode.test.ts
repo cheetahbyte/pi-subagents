@@ -8,8 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import subagentsExtension from "../src/index.js";
-import { setWorktreeIsolationEnabled } from "../src/worktree.js";
+import subagentsExtension from "../src/index.ts";
+import { setWorktreeIsolationEnabled } from "../src/worktree.ts";
 
 const EXAMPLE_TEMPLATE = fileURLToPath(new URL("../examples/agent-tool-description.md", import.meta.url));
 

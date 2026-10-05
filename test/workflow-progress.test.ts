@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { WorkflowMeta } from "../src/workflow/meta.js";
+import type { WorkflowMeta } from "../src/workflow/meta.ts";
 import {
   buildPhaseGroups,
   collapse,
@@ -11,7 +11,7 @@ import {
   stats,
   type WorkflowAgentEntry,
   type WorkflowEntry,
-} from "../src/workflow/progress.js";
+} from "../src/workflow/progress.ts";
 
 /**
  * Defaults to phase 0 because that is the common case, but `phaseIndex` is

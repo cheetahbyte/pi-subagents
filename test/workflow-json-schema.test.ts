@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { compileJsonSchema } from "../src/workflow/json-schema.js";
+import { compileJsonSchema } from "../src/workflow/json-schema.ts";
 
 /** A schema shaped like the one Claude Code's own example passes. */
 const FINDINGS = {

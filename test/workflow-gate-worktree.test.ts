@@ -23,18 +23,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/agent-runner.js", () => ({
+vi.mock("../src/agent-runner.ts", () => ({
   runAgent: vi.fn(),
   resumeAgent: vi.fn(),
 }));
 
-import { AgentManager } from "../src/agent-manager.js";
-import { runAgent } from "../src/agent-runner.js";
-import { registerAgents } from "../src/agent-types.js";
-import { createWorkflowHost } from "../src/workflow/host.js";
-import type { WorkflowAgentEntry, WorkflowEntry } from "../src/workflow/progress.js";
-import { runWorkflow, type WorkflowSpawnRequest } from "../src/workflow/runtime.js";
-import { ctx } from "./helpers/boot-extension.js";
+import { AgentManager } from "../src/agent-manager.ts";
+import { runAgent } from "../src/agent-runner.ts";
+import { registerAgents } from "../src/agent-types.ts";
+import { createWorkflowHost } from "../src/workflow/host.ts";
+import type { WorkflowAgentEntry, WorkflowEntry } from "../src/workflow/progress.ts";
+import { runWorkflow, type WorkflowSpawnRequest } from "../src/workflow/runtime.ts";
+import { ctx } from "./helpers/boot-extension.ts";
 
 /** What the child leaves behind, and the thing a correct gate can see. */
 const CHILD_FILE = "child-work.txt";

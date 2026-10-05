@@ -14,9 +14,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NO_FALLBACK, registerAgents, setFallbackSubagent } from "../src/agent-types.js";
-import { SubagentScheduler } from "../src/schedule.js";
-import { ScheduleStore } from "../src/schedule-store.js";
+import { NO_FALLBACK, registerAgents, setFallbackSubagent } from "../src/agent-types.ts";
+import { SubagentScheduler } from "../src/schedule.ts";
+import { ScheduleStore } from "../src/schedule-store.ts";
 
 function makeMockManager() {
   const spawnFn = vi.fn(() => "agent-" + Math.random().toString(36).slice(2, 10));

@@ -13,11 +13,11 @@
  * completion-notification race, and what protocol version 2 does not promise.
  */
 
-import { isTopLevelAgent } from "./agent-manager.js";
-import { type ModelRegistry, resolveModel } from "./model-resolver.js";
-import { checkModelScope } from "./model-scope.js";
-import type { AgentRecord } from "./types.js";
-import { compileJsonSchema } from "./workflow/json-schema.js";
+import { isTopLevelAgent } from "./agent-manager.ts";
+import { type ModelRegistry, resolveModel } from "./model-resolver.ts";
+import { checkModelScope } from "./model-scope.ts";
+import type { AgentRecord } from "./types.ts";
+import { compileJsonSchema } from "./workflow/json-schema.ts";
 
 /** Minimal event bus interface needed by the RPC handlers. */
 export interface EventBus {

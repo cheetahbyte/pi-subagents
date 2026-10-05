@@ -9,7 +9,7 @@ import {
   type SettingsAppliers,
   saveAndEmitChanged,
   saveSettings,
-} from "../src/settings.js";
+} from "../src/settings.ts";
 
 /**
  * Tests for persistent settings. Uses two tmp directories:

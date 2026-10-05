@@ -15,14 +15,14 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/agent-runner.js", async () => {
-  const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
+vi.mock("../src/agent-runner.ts", async () => {
+  const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
   return { ...actual, runAgent: vi.fn() };
 });
 
-import { runAgent } from "../src/agent-runner.js";
-import subagentsExtension from "../src/index.js";
-import { ctx, flush, makePi, textOf } from "./helpers/boot-extension.js";
+import { runAgent } from "../src/agent-runner.ts";
+import subagentsExtension from "../src/index.ts";
+import { ctx, flush, makePi, textOf } from "./helpers/boot-extension.ts";
 
 // runAgent is a module-level mock shared by every case here, so its history
 // has to be reset or one case's implementation leaks into the next.

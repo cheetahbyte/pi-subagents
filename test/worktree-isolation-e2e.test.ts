@@ -23,8 +23,8 @@ import { join } from "node:path";
 import type { Context } from "@earendil-works/pi-ai";
 import { fauxToolCall } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setWorktreeIsolationEnabled } from "../src/worktree.js";
-import { agentCall, type FauxReply, type PrintModeRun, runPrintMode } from "./helpers/print-mode-runner.js";
+import { setWorktreeIsolationEnabled } from "../src/worktree.ts";
+import { agentCall, type FauxReply, type PrintModeRun, runPrintMode } from "./helpers/print-mode-runner.ts";
 
 vi.setConfig({ testTimeout: 30_000 });
 

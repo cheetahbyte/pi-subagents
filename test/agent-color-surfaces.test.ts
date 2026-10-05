@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerAgents } from "../src/agent-types.js";
-import subagentsExtension from "../src/index.js";
-import type { AgentConfig, AgentRecord } from "../src/types.js";
-import { type AgentActivity, AgentWidget } from "../src/ui/agent-widget.js";
-import { ConversationViewer } from "../src/ui/conversation-viewer.js";
+import { registerAgents } from "../src/agent-types.ts";
+import subagentsExtension from "../src/index.ts";
+import type { AgentConfig, AgentRecord } from "../src/types.ts";
+import { type AgentActivity, AgentWidget } from "../src/ui/agent-widget.ts";
+import { ConversationViewer } from "../src/ui/conversation-viewer.ts";
 
 const TYPE = "colored-reviewer";
 const DISPLAY_NAME = "Code Reviewer";

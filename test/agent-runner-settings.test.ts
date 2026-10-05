@@ -5,7 +5,7 @@ import {
   normalizeMaxTurns,
   setDefaultMaxTurns,
   setGraceTurns,
-} from "../src/agent-runner.js";
+} from "../src/agent-runner.ts";
 
 describe("setDefaultMaxTurns / getDefaultMaxTurns", () => {
   beforeEach(() => {

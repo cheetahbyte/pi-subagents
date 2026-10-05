@@ -28,7 +28,7 @@ import {
   type PrintModeRun,
   routeBySession,
   runPrintMode,
-} from "./helpers/print-mode-runner.js";
+} from "./helpers/print-mode-runner.ts";
 
 // Real pi-mono (loader + dynamic extension import + two live sessions) — a cold
 // run under full-suite CPU contention can exceed vitest's 5s default.

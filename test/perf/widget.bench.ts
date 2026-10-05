@@ -17,8 +17,8 @@
  * measuring an unregistered widget returning an empty array.
  */
 import { afterAll, bench, describe } from "vitest";
-import { AgentWidget } from "../../src/ui/agent-widget.js";
-import { makeFleet, mountWidget } from "../helpers/perf-fixtures.js";
+import { AgentWidget } from "../../src/ui/agent-widget.ts";
+import { makeFleet, mountWidget } from "../helpers/perf-fixtures.ts";
 
 /** Fleet sizes: one agent, a normal fan-out, and a pathological one. */
 const SIZES = [1, 10, 100];

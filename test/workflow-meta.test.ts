@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractMeta, WorkflowMetaError } from "../src/workflow/meta.js";
+import { extractMeta, WorkflowMetaError } from "../src/workflow/meta.ts";
 
 /** Minimal valid header, so each test only varies what it is about. */
 const HEADER = `export const meta = { name: 'wf', description: 'does a thing' }`;

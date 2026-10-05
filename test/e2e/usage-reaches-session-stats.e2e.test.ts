@@ -35,9 +35,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PendingUsagePool } from "../../src/usage.js";
-import { fauxModelBackend } from "../helpers/faux-model-backend.js";
-import { registerFauxProvider } from "../helpers/pi-ai.js";
+import { PendingUsagePool } from "../../src/usage.ts";
+import { fauxModelBackend } from "../helpers/faux-model-backend.ts";
+import { registerFauxProvider } from "../helpers/pi-ai.ts";
 
 // Real pi session construction; a cold first run under full-suite CPU
 // contention can exceed vitest's 5s default.

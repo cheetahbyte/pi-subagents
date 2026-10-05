@@ -11,19 +11,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/agent-runner.js", async () => {
-  const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
+vi.mock("../src/agent-runner.ts", async () => {
+  const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
   return { ...actual, runAgent: vi.fn() };
 });
 
-import { runAgent } from "../src/agent-runner.js";
-import { registerAgents } from "../src/agent-types.js";
-import { type EventBus, registerRpcHandlers, type SpawnCapable } from "../src/cross-extension-rpc.js";
-import { loadCustomAgents } from "../src/custom-agents.js";
-import subagentsExtension from "../src/index.js";
-import { createNestedSubagentTools, type NestedAgentManager } from "../src/nested-tools.js";
-import { resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
-import { ctx, flush, type Hermetic, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
+import { runAgent } from "../src/agent-runner.ts";
+import { registerAgents } from "../src/agent-types.ts";
+import { type EventBus, registerRpcHandlers, type SpawnCapable } from "../src/cross-extension-rpc.ts";
+import { loadCustomAgents } from "../src/custom-agents.ts";
+import subagentsExtension from "../src/index.ts";
+import { createNestedSubagentTools, type NestedAgentManager } from "../src/nested-tools.ts";
+import { resolveStorePath, ScheduleStore } from "../src/schedule-store.ts";
+import { ctx, flush, type Hermetic, hermeticDir, makePi, textOf } from "./helpers/boot-extension.ts";
 
 const SCHEMA = { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] };
 const PAYLOAD = '{"answer":"42"}';

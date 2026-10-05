@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { encodeCwd, streamToOutputFile, writeInitialEntry } from "../src/output-file.js";
+import { encodeCwd, streamToOutputFile, writeInitialEntry } from "../src/output-file.ts";
 
 describe("encodeCwd", () => {
   it("encodes a POSIX absolute path by stripping the leading slash and replacing separators", () => {

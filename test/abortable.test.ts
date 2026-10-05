@@ -22,7 +22,7 @@
 // is why they are asserted directly rather than through a consumer.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { abortable } from "../src/abortable.js";
+import { abortable } from "../src/abortable.ts";
 
 /**
  * Collect unhandled rejections for the duration of a block.

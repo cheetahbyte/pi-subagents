@@ -12,8 +12,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerAgents } from "../src/agent-types.js";
-import subagentsExtension from "../src/index.js";
+import { registerAgents } from "../src/agent-types.ts";
+import subagentsExtension from "../src/index.ts";
 
 function makePi() {
   const tools = new Map<string, any>();

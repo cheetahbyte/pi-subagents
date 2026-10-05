@@ -9,8 +9,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
-import type { ScheduledSubagent } from "../src/types.js";
+import { resolveStorePath, ScheduleStore } from "../src/schedule-store.ts";
+import type { ScheduledSubagent } from "../src/types.ts";
 
 function makeJob(overrides: Partial<ScheduledSubagent> = {}): ScheduledSubagent {
   return {

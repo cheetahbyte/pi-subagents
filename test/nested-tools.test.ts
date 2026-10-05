@@ -7,12 +7,12 @@ import {
   AGENT_QUESTION_TOOL_NAMES,
   createAnswerSubagentQuestionTool,
   createAskParentTool,
-} from "../src/agent-question-tools.js";
-import { getAvailableTypes, registerAgents, setFallbackSubagent } from "../src/agent-types.js";
-import { loadCustomAgents } from "../src/custom-agents.js";
-import { setScopeModelsEnabled } from "../src/model-scope.js";
-import { createNestedSubagentTools, getMaxSubagentDepth, type NestedAgentManager, setMaxSubagentDepth } from "../src/nested-tools.js";
-import { encodeCwd } from "../src/output-file.js";
+} from "../src/agent-question-tools.ts";
+import { getAvailableTypes, registerAgents, setFallbackSubagent } from "../src/agent-types.ts";
+import { loadCustomAgents } from "../src/custom-agents.ts";
+import { setScopeModelsEnabled } from "../src/model-scope.ts";
+import { createNestedSubagentTools, getMaxSubagentDepth, type NestedAgentManager, setMaxSubagentDepth } from "../src/nested-tools.ts";
+import { encodeCwd } from "../src/output-file.ts";
 
 let cwd: string;
 let manager: NestedAgentManager;

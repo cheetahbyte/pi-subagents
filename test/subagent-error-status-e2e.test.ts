@@ -17,7 +17,7 @@ import {
   type PrintModeRun,
   routeBySession,
   runPrintMode,
-} from "./helpers/print-mode-runner.js";
+} from "./helpers/print-mode-runner.ts";
 
 /** Text of the parent's Agent tool result — what the orchestrator LLM sees. */
 function agentToolResult(session: AgentSession): string {

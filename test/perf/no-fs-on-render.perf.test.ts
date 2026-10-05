@@ -33,9 +33,9 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...wrapped, default: wrapped };
 });
 
-const { AgentWidget } = await import("../../src/ui/agent-widget.js");
-const { ConversationViewer } = await import("../../src/ui/conversation-viewer.js");
-const { makeFleet, makeSession, mountViewer, mountWidget } = await import("../helpers/perf-fixtures.js");
+const { AgentWidget } = await import("../../src/ui/agent-widget.ts");
+const { ConversationViewer } = await import("../../src/ui/conversation-viewer.ts");
+const { makeFleet, makeSession, mountViewer, mountWidget } = await import("../helpers/perf-fixtures.ts");
 
 describe("a rendered frame touches no filesystem", () => {
   it("AgentWidget.render", () => {

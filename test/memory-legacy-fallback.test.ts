@@ -13,7 +13,7 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: mockHomedir };
 });
 
-import { resolveMemoryDir } from "../src/memory.js";
+import { resolveMemoryDir } from "../src/memory.ts";
 
 describe("resolveMemoryDir user-scope legacy fallback", () => {
   let tmpDir: string;

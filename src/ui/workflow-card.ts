@@ -32,8 +32,8 @@
  */
 
 import { type Component, stripTerminalSequences, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { WorkflowEntryData } from "../workflow/entry.js";
-import type { WorkflowMeta } from "../workflow/meta.js";
+import type { WorkflowEntryData } from "../workflow/entry.ts";
+import type { WorkflowMeta } from "../workflow/meta.ts";
 import {
   buildPhaseGroups,
   collapse,
@@ -44,8 +44,8 @@ import {
   type WorkflowAgentEntry,
   type WorkflowEntry,
   type WorkflowRunStatus,
-} from "../workflow/progress.js";
-import type { Theme } from "./agent-widget.js";
+} from "../workflow/progress.ts";
+import type { Theme } from "./agent-widget.ts";
 
 /** Widest label column before stats stop being aligned and just follow the label. */
 const LABEL_COLUMN_MAX = 28;

@@ -7,8 +7,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GroupJoinManager } from "../src/group-join.js";
-import type { AgentRecord } from "../src/types.js";
+import { GroupJoinManager } from "../src/group-join.ts";
+import type { AgentRecord } from "../src/types.ts";
 
 function makeRecord(id: string, overrides: Partial<AgentRecord> = {}): AgentRecord {
   return {

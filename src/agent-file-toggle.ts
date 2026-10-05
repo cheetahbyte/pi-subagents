@@ -27,8 +27,8 @@
 
 import { existsSync } from "node:fs";
 import { join, sep } from "node:path";
-import { parseAgentFrontmatter, personalAgentsDir, projectAgentsDir, workspaceAgentsDir } from "./custom-agents.js";
-import type { AgentConfig } from "./types.js";
+import { parseAgentFrontmatter, personalAgentsDir, projectAgentsDir, workspaceAgentsDir } from "./custom-agents.ts";
+import type { AgentConfig } from "./types.ts";
 
 type AgentFileLocation = "project" | "workspace" | "personal";
 

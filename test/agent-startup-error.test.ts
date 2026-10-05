@@ -12,12 +12,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/worktree.js", async () => {
-  const actual = await vi.importActual<typeof import("../src/worktree.js")>("../src/worktree.js");
+vi.mock("../src/worktree.ts", async () => {
+  const actual = await vi.importActual<typeof import("../src/worktree.ts")>("../src/worktree.ts");
   return { ...actual, createWorktree: vi.fn(() => undefined) };
 });
 
-import subagentsExtension from "../src/index.js";
+import subagentsExtension from "../src/index.ts";
 
 function boot() {
   const tools = new Map<string, any>();

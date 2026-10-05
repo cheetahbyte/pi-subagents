@@ -22,11 +22,11 @@ import {
   WORKFLOW_AGENT_CAP,
   WORKFLOW_ITEM_CAP,
   workflowConcurrency,
-} from "../src/workflow/runtime.js";
+} from "../src/workflow/runtime.ts";
 import {
   compactWorkflowToolDescription,
   fullWorkflowToolDescription,
-} from "../src/workflow/tool-description.js";
+} from "../src/workflow/tool-description.ts";
 
 const description = fullWorkflowToolDescription;
 const contractDescriptions = [

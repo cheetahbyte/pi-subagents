@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addUsage, getLifetimeCost, getLifetimeTotal, getSessionContextPercent, PendingUsagePool } from "../src/usage.js";
+import { addUsage, getLifetimeCost, getLifetimeTotal, getSessionContextPercent, PendingUsagePool } from "../src/usage.ts";
 
 // Regression for issue #38 — token semantics + context indicator
 describe("usage", () => {

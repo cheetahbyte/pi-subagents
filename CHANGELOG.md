@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Subagent results returned to the caller are capped at 50KB or 2000 lines.** A foreground `Agent` result, a resume, `get_subagent_result` and nested results passed the agent's full prose into the parent's context, whatever its size. A longer result is now cut and ends with a note naming the `.output` transcript that holds the rest. Structured (`schema`) payloads and `verbose` conversation logs are not cut.
+- **The extension loads about 6x faster at pi startup (~195ms to ~30ms).** Relative imports now name the `.ts` source (`./x.ts`) instead of `./x.js`. pi loads extensions through jiti, which probed some 20 missing files for every `./x.js` before trying `x.ts`. `tsc` rewrites the extensions back to `.js` in `dist/`.
 
 ### Fixed
 

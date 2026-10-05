@@ -28,10 +28,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { extensionCanonicalName, runAgent } from "../src/agent-runner.js";
-import { registerAgents } from "../src/agent-types.js";
-import type { AgentConfig } from "../src/types.js";
-import { registerFauxProvider } from "./helpers/pi-ai.js";
+import { extensionCanonicalName, runAgent } from "../src/agent-runner.ts";
+import { registerAgents } from "../src/agent-types.ts";
+import type { AgentConfig } from "../src/types.ts";
+import { registerFauxProvider } from "./helpers/pi-ai.ts";
 
 // These tests spin up the REAL pi-mono runtime (loader + dynamic extension
 // import + session construction), so a cold first run under full-suite CPU

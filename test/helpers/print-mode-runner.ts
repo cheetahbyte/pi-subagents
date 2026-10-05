@@ -67,8 +67,8 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { fauxModelBackend } from "./faux-model-backend.js";
-import { getModel, registerFauxProvider } from "./pi-ai.js";
+import { fauxModelBackend } from "./faux-model-backend.ts";
+import { getModel, registerFauxProvider } from "./pi-ai.ts";
 
 /** Path to the pi-subagents extension entrypoint (repo `src/index.ts`). */
 const EXTENSION_PATH = fileURLToPath(new URL("../../src/index.ts", import.meta.url));

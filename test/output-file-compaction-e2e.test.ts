@@ -18,9 +18,9 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { streamToOutputFile, writeInitialEntry } from "../src/output-file.js";
-import { fauxModelBackend } from "./helpers/faux-model-backend.js";
-import { registerFauxProvider } from "./helpers/pi-ai.js";
+import { streamToOutputFile, writeInitialEntry } from "../src/output-file.ts";
+import { fauxModelBackend } from "./helpers/faux-model-backend.ts";
+import { registerFauxProvider } from "./helpers/pi-ai.ts";
 
 const TURNS_BEFORE_COMPACT = 6;
 

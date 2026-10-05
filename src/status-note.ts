@@ -9,7 +9,7 @@
  */
 
 import { formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
-import type { AgentRecord } from "./types.js";
+import type { AgentRecord } from "./types.ts";
 
 /** Which limit ended a "steered" or "aborted" run: its `timeout`, or its turn budget. */
 export function limitName(timedOut = false): string {

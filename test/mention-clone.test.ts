@@ -34,8 +34,8 @@ vi.mock("@earendil-works/pi-coding-agent", async () => {
   };
 });
 
-import { agentMentionReminder } from "../src/mention.js";
-import { runMentionClone } from "../src/mention-clone.js";
+import { agentMentionReminder } from "../src/mention.ts";
+import { runMentionClone } from "../src/mention-clone.ts";
 
 /** The prompt the parent session is really running under. */
 const PARENT_PROMPT = "the live system prompt";

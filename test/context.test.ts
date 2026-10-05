@@ -9,7 +9,7 @@
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { buildParentContext, extractText } from "../src/context.js";
+import { buildParentContext, extractText } from "../src/context.ts";
 
 function makeCtx(entries: unknown[]): ExtensionContext {
   return { sessionManager: { getBranch: () => entries } } as unknown as ExtensionContext;

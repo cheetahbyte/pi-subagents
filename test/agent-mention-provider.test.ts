@@ -12,9 +12,9 @@
  */
 import { CombinedAutocompleteProvider } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentManager } from "../src/agent-manager.js";
-import type { AgentRecord, AgentTombstone } from "../src/types.js";
-import { createMentionProvider, mentionRoster } from "../src/ui/agent-mention.js";
+import type { AgentManager } from "../src/agent-manager.ts";
+import type { AgentRecord, AgentTombstone } from "../src/types.ts";
+import { createMentionProvider, mentionRoster } from "../src/ui/agent-mention.ts";
 
 const FILE_SUGGESTIONS = { items: [{ value: "@src/index.ts", label: "src/index.ts" }], prefix: "@src/" };
 

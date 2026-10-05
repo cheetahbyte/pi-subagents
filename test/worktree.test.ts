@@ -10,7 +10,7 @@ import {
   isWorktreeIsolationEnabled,
   pruneWorktrees,
   setWorktreeIsolationEnabled,
-} from "../src/worktree.js";
+} from "../src/worktree.ts";
 
 /**
  * Minimal stand-in for pi.exec(): runs the command for real, and — like the

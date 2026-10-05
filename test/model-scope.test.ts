@@ -13,8 +13,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ModelRegistryRef } from "../src/enabled-models.js";
-import { checkModelScope, isScopeModelsEnabled, setScopeModelsEnabled } from "../src/model-scope.js";
+import type { ModelRegistryRef } from "../src/enabled-models.ts";
+import { checkModelScope, isScopeModelsEnabled, setScopeModelsEnabled } from "../src/model-scope.ts";
 
 const MODELS = [
   { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic" },

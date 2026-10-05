@@ -12,8 +12,8 @@ import {
   STRUCTURED_OUTPUT_TOOL_NAME,
   type StructuredCapture,
   structuredRetryPrompt,
-} from "../src/structured-output.js";
-import { compileJsonSchema } from "../src/workflow/json-schema.js";
+} from "../src/structured-output.ts";
+import { compileJsonSchema } from "../src/workflow/json-schema.ts";
 
 const SCHEMA = {
   type: "object",

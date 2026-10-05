@@ -12,10 +12,10 @@
  */
 
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { AgentRecord } from "../types.js";
-import { pauseWorkflowTask, resumeWorkflowTask, type WorkflowTask } from "../workflow/task.js";
-import { VIEWPORT_HEIGHT_PCT } from "./conversation-viewer.js";
-import { WorkflowDialog } from "./workflow-dialog.js";
+import type { AgentRecord } from "../types.ts";
+import { pauseWorkflowTask, resumeWorkflowTask, type WorkflowTask } from "../workflow/task.ts";
+import { VIEWPORT_HEIGHT_PCT } from "./conversation-viewer.ts";
+import { WorkflowDialog } from "./workflow-dialog.ts";
 
 /** Everything the menu and the inspector need from the extension around them. */
 export interface WorkflowMenuDeps {

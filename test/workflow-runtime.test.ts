@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { WorkflowJournalEntry } from "../src/workflow/journal.js";
-import { buildPhaseGroups, type WorkflowAgentEntry, type WorkflowEntry } from "../src/workflow/progress.js";
+import type { WorkflowJournalEntry } from "../src/workflow/journal.ts";
+import { buildPhaseGroups, type WorkflowAgentEntry, type WorkflowEntry } from "../src/workflow/progress.ts";
 import {
   assertBoundarySafe,
   type RunWorkflowOptions,
@@ -13,7 +13,7 @@ import {
   type WorkflowSpawnRequest,
   type WorkflowSpawnResult,
   workflowConcurrency,
-} from "../src/workflow/runtime.js";
+} from "../src/workflow/runtime.ts";
 
 const HEAD = 'export const meta = { name: "probe", description: "a test workflow" };\n';
 
@@ -64,7 +64,7 @@ describe("the worker source itself", () => {
     // double-quoted string all type-check cleanly and then fail at runtime as
     // "missing ) after argument list" from inside a worker thread. Parsing it
     // here turns a twenty-minute bisect into a red test.
-    const { WORKER_SOURCE } = await import("../src/workflow/worker-source.js");
+    const { WORKER_SOURCE } = await import("../src/workflow/worker-source.ts");
     expect(() => new Function(WORKER_SOURCE)).not.toThrow();
   });
 });

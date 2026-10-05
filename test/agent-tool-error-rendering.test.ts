@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import subagentsExtension from "../src/index.js";
+import subagentsExtension from "../src/index.ts";
 
 function agentTool() {
   const tools = new Map<string, any>();

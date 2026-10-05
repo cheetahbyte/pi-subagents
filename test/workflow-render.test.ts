@@ -8,10 +8,10 @@ import {
   styleWorkflowCardLines,
   type WorkflowCardInput,
   type WorkflowCardTask,
-} from "../src/ui/workflow-card.js";
-import type { WorkflowMeta } from "../src/workflow/meta.js";
-import type { WorkflowAgentEntry, WorkflowEntry } from "../src/workflow/progress.js";
-import { plainWorkflowLines } from "./helpers/workflow-lines.js";
+} from "../src/ui/workflow-card.ts";
+import type { WorkflowMeta } from "../src/workflow/meta.ts";
+import type { WorkflowAgentEntry, WorkflowEntry } from "../src/workflow/progress.ts";
+import { plainWorkflowLines } from "./helpers/workflow-lines.ts";
 
 const START = 1_000_000;
 

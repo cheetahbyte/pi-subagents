@@ -20,9 +20,9 @@ import {
   formatDuration,
   formatSessionTokens,
   formatTurns,
-} from "../../src/ui/agent-widget.js";
-import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent } from "../../src/usage.js";
-import { NOW, perfSession, perfTheme } from "../helpers/perf-fixtures.js";
+} from "../../src/ui/agent-widget.ts";
+import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent } from "../../src/usage.ts";
+import { NOW, perfSession, perfTheme } from "../helpers/perf-fixtures.ts";
 
 const INVOCATION = {
   modelName: "sonnet 4.6",

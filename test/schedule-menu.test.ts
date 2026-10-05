@@ -17,9 +17,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SubagentScheduler } from "../src/schedule.js";
-import { ScheduleStore } from "../src/schedule-store.js";
-import { showSchedulesMenu } from "../src/ui/schedule-menu.js";
+import { SubagentScheduler } from "../src/schedule.ts";
+import { ScheduleStore } from "../src/schedule-store.ts";
+import { showSchedulesMenu } from "../src/ui/schedule-menu.ts";
 
 /** ctx.ui stub: `select` returns whichever label index we tell it to. */
 function makeCtx(opts: { pick?: (labels: string[]) => string | undefined; confirm?: boolean } = {}) {

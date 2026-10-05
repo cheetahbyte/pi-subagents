@@ -15,8 +15,8 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SubagentScheduler } from "../src/schedule.js";
-import { ScheduleStore } from "../src/schedule-store.js";
+import { SubagentScheduler } from "../src/schedule.ts";
+import { ScheduleStore } from "../src/schedule-store.ts";
 
 type FakeRecord = { status: string; promise: Promise<string>; resolve: () => void };
 

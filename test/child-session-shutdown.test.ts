@@ -12,22 +12,22 @@
  * hung handler can't strand the user at a dead terminal.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentManager } from "../src/agent-manager.js";
+import { AgentManager } from "../src/agent-manager.ts";
 
-vi.mock("../src/agent-runner.js", () => ({
+vi.mock("../src/agent-runner.ts", () => ({
   runAgent: vi.fn(),
   resumeAgent: vi.fn(),
 }));
 
-vi.mock("../src/worktree.js", () => ({
+vi.mock("../src/worktree.ts", () => ({
   createWorktree: vi.fn(),
   cleanupWorktree: vi.fn(() => ({ hasChanges: false })),
   pruneWorktrees: vi.fn(async () => {}),
   isWorktreeIsolationEnabled: vi.fn(() => true),
 }));
 
-import { runAgent } from "../src/agent-runner.js";
-import { pruneWorktrees } from "../src/worktree.js";
+import { runAgent } from "../src/agent-runner.ts";
+import { pruneWorktrees } from "../src/worktree.ts";
 
 const mockPi = {} as any;
 const mockCtx = { cwd: "/tmp" } as any;

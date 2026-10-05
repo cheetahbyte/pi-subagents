@@ -21,8 +21,8 @@ import {
   isDisabledContent,
   isEmptyStub,
   locateAgentFile,
-} from "../src/agent-file-toggle.js";
-import { parseAgentFrontmatter } from "../src/custom-agents.js";
+} from "../src/agent-file-toggle.ts";
+import { parseAgentFrontmatter } from "../src/custom-agents.ts";
 
 /** What the loader concludes about a file, via the same parser it really uses. */
 function loaderSeesDisabled(content: string): boolean {

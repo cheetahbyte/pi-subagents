@@ -13,8 +13,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import subagentsExtension from "../src/index.js";
-import { ctx, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.js";
+import subagentsExtension from "../src/index.ts";
+import { ctx, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.ts";
 
 /** Boot the real extension and hand back its `/agents` command. */
 function bootCommand() {

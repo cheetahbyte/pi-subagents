@@ -2,10 +2,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { serializeAgentFile } from "../src/agent-file-toggle.js";
-import { BUILTIN_TOOL_NAMES } from "../src/agent-types.js";
-import { loadCustomAgents } from "../src/custom-agents.js";
-import type { AgentConfig } from "../src/types.js";
+import { serializeAgentFile } from "../src/agent-file-toggle.ts";
+import { BUILTIN_TOOL_NAMES } from "../src/agent-types.ts";
+import { loadCustomAgents } from "../src/custom-agents.ts";
+import type { AgentConfig } from "../src/types.ts";
 
 describe("loadCustomAgents", () => {
   let tmpDir: string;

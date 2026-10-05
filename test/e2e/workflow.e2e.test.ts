@@ -23,15 +23,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import { encodeCwd } from "../../src/output-file.js";
-import { readJournal } from "../../src/workflow/journal.js";
+import { encodeCwd } from "../../src/output-file.ts";
+import { readJournal } from "../../src/workflow/journal.ts";
 import {
   contextSystemPrompt,
   contextToolNames,
   runPrintMode,
   toolCallsNamed,
   toolResultsNamed,
-} from "../helpers/print-mode-runner.js";
+} from "../helpers/print-mode-runner.ts";
 
 /**
  * A project directory with workflows switched on.

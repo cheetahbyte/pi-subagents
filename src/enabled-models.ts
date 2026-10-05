@@ -29,8 +29,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { ModelEntry, ModelRegistry } from "./model-resolver.js";
-import { isProjectTrusted } from "./project-trust.js";
+import type { ModelEntry, ModelRegistry } from "./model-resolver.ts";
+import { isProjectTrusted } from "./project-trust.ts";
 
 /** Minimal registry shape — only the methods resolveEnabledModels actually calls. */
 export type ModelRegistryRef = Pick<ModelRegistry, "getAll" | "getAvailable">;

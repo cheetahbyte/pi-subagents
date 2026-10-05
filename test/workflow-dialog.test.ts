@@ -1,7 +1,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import { SPINNER } from "../src/ui/agent-widget.js";
-import { styleWorkflowCardLines, type WorkflowCardTask } from "../src/ui/workflow-card.js";
+import { SPINNER } from "../src/ui/agent-widget.ts";
+import { styleWorkflowCardLines, type WorkflowCardTask } from "../src/ui/workflow-card.ts";
 import {
   DEFAULT_PANE_BODY_ROWS,
   dialogRowGlyph,
@@ -18,10 +18,10 @@ import {
   type WorkflowDialogInput,
   type WorkflowDialogState,
   workflowDialogContentWidth,
-} from "../src/ui/workflow-dialog.js";
-import type { WorkflowMeta } from "../src/workflow/meta.js";
-import type { WorkflowAgentEntry, WorkflowEntry } from "../src/workflow/progress.js";
-import { plainWorkflowLines } from "./helpers/workflow-lines.js";
+} from "../src/ui/workflow-dialog.ts";
+import type { WorkflowMeta } from "../src/workflow/meta.ts";
+import type { WorkflowAgentEntry, WorkflowEntry } from "../src/workflow/progress.ts";
+import { plainWorkflowLines } from "./helpers/workflow-lines.ts";
 
 const START = 1_000_000;
 

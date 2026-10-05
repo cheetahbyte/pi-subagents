@@ -1,6 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import { renderAgentNameLabel, resolveAgentColor } from "../src/agent-color.js";
+import { renderAgentNameLabel, resolveAgentColor } from "../src/agent-color.ts";
 
 const theme = {
   fg: (color: string, text: string) => `<${color}>${text}</${color}>`,

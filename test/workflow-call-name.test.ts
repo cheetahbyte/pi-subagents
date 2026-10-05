@@ -23,7 +23,7 @@ vi.mock("node:vm", async importOriginal => {
   return { ...actual, Script: CountingScript };
 });
 
-import { workflowCallName } from "../src/workflow/meta.js";
+import { workflowCallName } from "../src/workflow/meta.ts";
 
 const script = (name: string) => `export const meta = { name: "${name}", description: "d" };\nreturn 1;`;
 

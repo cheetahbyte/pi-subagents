@@ -51,9 +51,9 @@ vi.mock("@earendil-works/pi-coding-agent", async () => {
   };
 });
 
-import { runMentionClone } from "../../src/mention-clone.js";
-import { fauxModelBackend } from "../helpers/faux-model-backend.js";
-import { registerFauxProvider } from "../helpers/pi-ai.js";
+import { runMentionClone } from "../../src/mention-clone.ts";
+import { fauxModelBackend } from "../helpers/faux-model-backend.ts";
+import { registerFauxProvider } from "../helpers/pi-ai.ts";
 
 describe("mention clone tool reachability against real pi-mono", () => {
   let cwd: string;

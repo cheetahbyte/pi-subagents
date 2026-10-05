@@ -19,16 +19,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentManager } from "../src/agent-manager.js";
-import { SUBAGENT_TOOL_NAMES } from "../src/agent-runner.js";
-import { NO_FALLBACK, registerAgents, setFallbackSubagent } from "../src/agent-types.js";
-import subagentsExtension, { WORKFLOW_ENTRY_TYPE, WORKFLOW_FILE_FLAG } from "../src/index.js";
-import { isScopeModelsEnabled, setScopeModelsEnabled } from "../src/model-scope.js";
-import type { AgentRecord } from "../src/types.js";
-import { createWorkflowHost } from "../src/workflow/host.js";
-import { compileJsonSchema } from "../src/workflow/json-schema.js";
-import type { WorkflowSpawnRequest } from "../src/workflow/runtime.js";
-import { ctx, flush, type Hermetic, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
+import type { AgentManager } from "../src/agent-manager.ts";
+import { SUBAGENT_TOOL_NAMES } from "../src/agent-runner.ts";
+import { NO_FALLBACK, registerAgents, setFallbackSubagent } from "../src/agent-types.ts";
+import subagentsExtension, { WORKFLOW_ENTRY_TYPE, WORKFLOW_FILE_FLAG } from "../src/index.ts";
+import { isScopeModelsEnabled, setScopeModelsEnabled } from "../src/model-scope.ts";
+import type { AgentRecord } from "../src/types.ts";
+import { createWorkflowHost } from "../src/workflow/host.ts";
+import { compileJsonSchema } from "../src/workflow/json-schema.ts";
+import type { WorkflowSpawnRequest } from "../src/workflow/runtime.ts";
+import { ctx, flush, type Hermetic, hermeticDir, makePi, textOf } from "./helpers/boot-extension.ts";
 
 /* ------------------------------------------------------------------------- *
  * Fixtures

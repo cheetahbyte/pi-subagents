@@ -7,36 +7,36 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { abortable } from "./abortable.js";
-import { createAnswerSubagentQuestionTool, textResult } from "./agent-question-tools.js";
+import { abortable } from "./abortable.ts";
+import { createAnswerSubagentQuestionTool, textResult } from "./agent-question-tools.ts";
 import {
   buildAgentRegistry,
   getAgentConfigIn,
   getAvailableTypesIn,
   resolveEnabledTypeIn,
   resolveTypeIn,
-} from "./agent-types.js";
-import { loadCustomAgents } from "./custom-agents.js";
-import { isolationParam, resolveAgentInvocationConfig, schemaParam } from "./invocation-config.js";
-import { resolveModel } from "./model-resolver.js";
-import { checkModelScope } from "./model-scope.js";
+} from "./agent-types.ts";
+import { loadCustomAgents } from "./custom-agents.ts";
+import { isolationParam, resolveAgentInvocationConfig, schemaParam } from "./invocation-config.ts";
+import { resolveModel } from "./model-resolver.ts";
+import { checkModelScope } from "./model-scope.ts";
 import {
   createOutputFilePath,
   getOutputTranscriptDefault,
   streamToOutputFile,
   writeInitialEntry,
-} from "./output-file.js";
-import { capResult, getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
+} from "./output-file.ts";
+import { capResult, getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.ts";
 import type {
   AgentConfig,
   AgentInvocation,
   AgentRecord,
   IsolationMode,
   ThinkingLevel,
-} from "./types.js";
-import { addUsage } from "./usage.js";
-import { type CompiledSchema, compileJsonSchema } from "./workflow/json-schema.js";
-import { isWorktreeIsolationEnabled } from "./worktree.js";
+} from "./types.ts";
+import { addUsage } from "./usage.ts";
+import { type CompiledSchema, compileJsonSchema } from "./workflow/json-schema.ts";
+import { isWorktreeIsolationEnabled } from "./worktree.ts";
 
 /**
  * Hard ceiling on nesting for every branch: main session = 0, its subagents = 1,

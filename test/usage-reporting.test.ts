@@ -12,16 +12,16 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/agent-runner.js", async () => {
-  const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
+vi.mock("../src/agent-runner.ts", async () => {
+  const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
   return { ...actual, runAgent: vi.fn(), resumeAgent: vi.fn() };
 });
 
-import { resumeAgent, runAgent } from "../src/agent-runner.js";
-import { registerAgents } from "../src/agent-types.js";
-import subagentsExtension from "../src/index.js";
-import { addUsage } from "../src/usage.js";
-import { ctx, flush, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.js";
+import { resumeAgent, runAgent } from "../src/agent-runner.ts";
+import { registerAgents } from "../src/agent-types.ts";
+import subagentsExtension from "../src/index.ts";
+import { addUsage } from "../src/usage.ts";
+import { ctx, flush, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.ts";
 
 /** Drive one foreground run that spends `usage` on a single assistant message. */
 function runSpending(usage: { input: number; output: number; cacheWrite: number; cacheRead?: number; cost?: number }) {

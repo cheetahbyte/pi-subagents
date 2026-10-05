@@ -21,8 +21,8 @@
  * "cold" here while every other test stays green.
  */
 import { bench, describe } from "vitest";
-import { ConversationViewer } from "../../src/ui/conversation-viewer.js";
-import { makeSession, mountViewer } from "../helpers/perf-fixtures.js";
+import { ConversationViewer } from "../../src/ui/conversation-viewer.ts";
+import { makeSession, mountViewer } from "../helpers/perf-fixtures.ts";
 
 const SIZES = [50, 500, 5000];
 

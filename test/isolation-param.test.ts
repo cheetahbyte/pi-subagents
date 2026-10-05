@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isolationParam } from "../src/invocation-config.js";
+import { isolationParam } from "../src/invocation-config.ts";
 
 /**
  * The `isolation` parameter's *shape* is the fix for #231, so it is worth
