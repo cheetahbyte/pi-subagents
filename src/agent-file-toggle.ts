@@ -30,7 +30,7 @@ import { join, sep } from "node:path";
 import { parseAgentFrontmatter, personalAgentsDir, projectAgentsDir, workspaceAgentsDir } from "./custom-agents.js";
 import type { AgentConfig } from "./types.js";
 
-export type AgentFileLocation = "project" | "workspace" | "personal";
+type AgentFileLocation = "project" | "workspace" | "personal";
 
 /**
  * Find the file path of a custom agent by name, in discovery-precedence order
@@ -88,7 +88,7 @@ function classifyAgentDir(path: string, cwd: string): AgentFileLocation {
   return "personal";
 }
 
-export type DisableOutcome = "disabled" | "already-disabled" | "no-frontmatter";
+type DisableOutcome = "disabled" | "already-disabled" | "no-frontmatter";
 
 /** A line that sets `enabled: false`, ignoring trailing whitespace / CR. */
 const ENABLED_FALSE = /^enabled:[ \t]*false[ \t]*$/;
@@ -107,10 +107,9 @@ const FENCE = /^---[ \t]*$/;
  * usable block.
  */
 function splitFrontmatter(content: string):
-  | { lines: string[]; openIdx: number; closeIdx: number; eol: string }
+  | { lines: string[]; closeIdx: number; eol: string }
   | undefined {
   const lines = content.split(/(?<=\n)/);
-  if (lines.length === 0) return undefined;
   // The BOM stays where it is — it belongs to the file, not the block — so the
   // fence test looks past it and every index below is unaffected.
   const bom = content.startsWith("\uFEFF");
@@ -118,7 +117,7 @@ function splitFrontmatter(content: string):
   if (!FENCE.test(first)) return undefined;
   const closeIdx = lines.findIndex((l, i) => i > 0 && FENCE.test(l.replace(/\r?\n$/, "")));
   if (closeIdx === -1) return undefined;
-  return { lines, openIdx: 0, closeIdx, eol: lines[0].endsWith("\r\n") ? "\r\n" : "\n" };
+  return { lines, closeIdx, eol: lines[0].endsWith("\r\n") ? "\r\n" : "\n" };
 }
 
 /**
@@ -179,7 +178,7 @@ export function isEmptyStub(content: string): boolean {
 }
 
 /** The answers `/agents → Create agent → Manual` collects, before serialization. */
-export interface NewAgentInput {
+interface NewAgentInput {
   description: string;
   /** Already-resolved `tools:` value ("none", "all", or a CSV of tool names). */
   tools: string;

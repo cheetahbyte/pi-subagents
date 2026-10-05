@@ -22,8 +22,8 @@
  *
  * **The glyphs are not the card's glyphs.** `workflow-card.ts` keys off the raw
  * entry `state`; this file keys off the *derived* `displayState(entry, active)`
- * and splits cases the card cannot see — skipped, blocked, queued and
- * interrupted all render as a plain ✘ or ⟳ inline but are distinct here. `◌`
+ * and splits cases the card cannot see — skipped, queued and interrupted all
+ * render as a plain ✘ or ⟳ inline but are distinct here. `◌`
  * (U+25CC) appears only in this file, and a running row animates a spinner where
  * the card draws a static `⟳`.
  *
@@ -55,7 +55,6 @@ import {
   displayState,
   formatDuration,
   header,
-  isLive,
   type PhaseGroup,
   type WorkflowAgentEntry,
   type WorkflowDisplayState,
@@ -63,13 +62,13 @@ import {
 } from "../workflow/progress.js";
 import { SPINNER, type Theme } from "./agent-widget.js";
 import {
-  ASCII_GLYPHS,
   clampLine,
   formatCompactTokens,
-  formatModel,
   formatThinking,
+  formatToolCalls,
   lineWidth,
   REPLAYED_ANNOTATION,
+  rightAlign,
   styleWorkflowCardLines,
   UNICODE_GLYPHS,
   type WorkflowCardColor,
@@ -80,7 +79,6 @@ import {
 
 /** Fallback width when the caller does not know the terminal's. */
 const DEFAULT_WIDTH = 80;
-
 
 /** Inner width of the left pane at any comfortable terminal size. */
 const LEFT_PANE_WIDTH = 18;
@@ -104,13 +102,13 @@ export const MIN_PANE_BODY_ROWS = 6;
 /** Prompt lines shown before `expand` is offered. */
 export const PROMPT_COLLAPSED_LINES = 4;
 /** Spinner cadence. Unlike the card's 1s header tick, this row really animates. */
-export const WORKFLOW_DIALOG_SPINNER_MS = 80;
+const WORKFLOW_DIALOG_SPINNER_MS = 80;
 
 /* ------------------------------------------------------------------------- *
  * Glyphs
  * ------------------------------------------------------------------------- */
 
-export interface WorkflowDialogGlyphs {
+interface WorkflowDialogGlyphs {
   tick: string;
   cross: string;
   /** `◌` — queued or interrupted. The card has no row that draws this. */
@@ -161,35 +159,7 @@ export const UNICODE_DIALOG_GLYPHS: WorkflowDialogGlyphs = {
   enter: "⏎",
 };
 
-/** The ASCII tier, one column per glyph so the panes stay aligned either way. */
-export const ASCII_DIALOG_GLYPHS: WorkflowDialogGlyphs = {
-  tick: ASCII_GLYPHS.tick,
-  cross: ASCII_GLYPHS.cross,
-  queued: "o",
-  pointer: ">",
-  focus: ASCII_GLYPHS.pointer,
-  spinner: ["-", "\\", "|", "/"],
-  box: {
-    topLeft: "+",
-    topRight: "+",
-    bottomLeft: "+",
-    bottomRight: "+",
-    horizontal: "-",
-    vertical: "|",
-    topTee: "+",
-    bottomTee: "+",
-  },
-  ellipsis: "~",
-  upDown: "up/down",
-  enter: "enter",
-};
-
-/**
- * The recovered dialog mapping — keyed on the *display* state.
- *
- * Claude Code's `permission` colour has no pi equivalent; a blocked agent is
- * waiting on the user, so it maps to `warning` (selection maps to `accent`).
- */
+/** The recovered dialog mapping — keyed on the *display* state. */
 export function dialogRowGlyph(
   state: WorkflowDisplayState,
   glyphs: WorkflowDialogGlyphs,
@@ -202,8 +172,6 @@ export function dialogRowGlyph(
       return { text: glyphs.cross, color: "error" };
     case "skipped":
       return { text: glyphs.cross, color: "dim" };
-    case "blocked":
-      return { text: glyphs.cross, color: "warning" };
     case "queued":
     case "interrupted":
       return { text: glyphs.queued, color: "dim" };
@@ -245,19 +213,18 @@ export const WORKFLOW_DIALOG_COPY = {
  * The panes never change count, only what they hold, which is what makes the
  * frame stay put as you drill in and back out.
  */
-export type WorkflowDialogLevel = "phases" | "agent";
+type WorkflowDialogLevel = "phases" | "agent";
 
 /** `all`, or exactly one display state. */
-export type WorkflowDialogFilter = "all" | WorkflowDisplayState;
+type WorkflowDialogFilter = "all" | WorkflowDisplayState;
 
 /** The order `f` cycles through. */
-export const WORKFLOW_DIALOG_FILTERS: readonly WorkflowDialogFilter[] = [
+const WORKFLOW_DIALOG_FILTERS: readonly WorkflowDialogFilter[] = [
   "all",
   "running",
   "queued",
   "done",
   "failed",
-  "blocked",
   "skipped",
   "interrupted",
 ];
@@ -271,9 +238,9 @@ export interface WorkflowDialogState {
   promptExpanded: boolean;
 }
 
-export function initialWorkflowDialogState(initialPhaseIndex = 0): WorkflowDialogState {
+export function initialWorkflowDialogState(): WorkflowDialogState {
   return {
-    selectedPhase: initialPhaseIndex,
+    selectedPhase: 0,
     selectedAgent: 0,
     level: "phases",
     filter: "all",
@@ -301,15 +268,7 @@ export interface WorkflowDialogInput extends WorkflowDialogSource {
   now?: number;
   /** The *terminal* width; the content width is derived from it. */
   width?: number;
-  ascii?: boolean;
   spinnerFrame?: number;
-  /**
-   * Most rows the frame may use, overriding {@link DEFAULT_PANE_BODY_ROWS}.
-   *
-   * The frame still sizes to its content and still respects
-   * {@link MIN_PANE_BODY_ROWS}; this only moves the ceiling.
-   */
-  bodyRows?: number;
 }
 
 /** The actions the dialog needs from the workflow runtime, injected. */
@@ -331,7 +290,7 @@ export interface WorkflowDialogActions {
   onOpenAgent?(recordId: string): void;
 }
 
-export type WorkflowDialogAction =
+type WorkflowDialogAction =
   | { kind: "cancel" }
   | { kind: "kill" }
   | { kind: "pause" }
@@ -409,23 +368,12 @@ export function subStatusAnnotations(
   const parts: string[] = [];
   if (entry.isolation) parts.push(entry.isolation);
   if (entry.cached) parts.push(REPLAYED_ANNOTATION);
-  if (entry.lastAttemptReason) {
-    parts.push(entry.lastAttemptReason === "user-retry" ? "user retry" : entry.lastAttemptReason);
-  }
+  if (entry.lastAttemptReason) parts.push("user retry");
   if (entry.attempt != null && entry.attempt > 1) parts.push(`attempt ${entry.attempt}`);
   if (state === "queued" && entry.queuedAt != null) {
     parts.push(`waiting ${formatDuration(Math.max(0, now - entry.queuedAt))}`);
   }
   return parts;
-}
-
-
-/** Place `right` flush to `width`, cutting `left` first so the stats survive. */
-function rightAlign(left: WorkflowCardLine, right: WorkflowCardLine, width: number): WorkflowCardLine {
-  const rightWidth = lineWidth(right);
-  const clampedLeft = clampLine(left, Math.max(0, width - rightWidth - 1));
-  const gap = Math.max(1, width - lineWidth(clampedLeft) - rightWidth);
-  return clampLine([...clampedLeft, { text: " ".repeat(gap) }, ...right], width);
 }
 
 /**
@@ -450,7 +398,7 @@ function windowRange(selected: number, total: number, max: number): { start: num
  * everything that actually needs room, so giving the left a share of a wide
  * terminal would only pad it. It gives way on a narrow one.
  */
-export function leftPaneWidth(width: number): number {
+function leftPaneWidth(width: number): number {
   // The two cells share everything except the three border columns, and the
   // right one must keep at least a column — so the left is capped by what it
   // can take without squeezing the right out and tearing the frame.
@@ -506,14 +454,13 @@ function paneFrame(options: {
   rightTitle: string;
   leftRows: WorkflowCardLine[];
   rightRows: WorkflowCardLine[];
-  width: number;
+  leftWidth: number;
+  rightWidth: number;
   bodyRows: number;
   glyphs: WorkflowDialogGlyphs;
 }): WorkflowCardLine[] {
-  const { glyphs, width } = options;
+  const { glyphs, leftWidth: left, rightWidth: right } = options;
   const box = glyphs.box;
-  const left = leftPaneWidth(width);
-  const right = Math.max(1, width - left - 3);
 
   const lines: WorkflowCardLine[] = [];
   lines.push([
@@ -555,7 +502,7 @@ const previewLines = (preview: string | undefined) => (preview ? preview.split("
 function activityBody(entry: WorkflowAgentEntry, state: WorkflowDisplayState): string {
   if (state === "queued") return WORKFLOW_DIALOG_COPY.availableOnceStarted;
   if ((entry.toolCalls ?? 0) > 0) return WORKFLOW_DIALOG_COPY.noTranscript;
-  return isLive(entry) ? WORKFLOW_DIALOG_COPY.noToolCallsYet : WORKFLOW_DIALOG_COPY.noToolCalls;
+  return entry.state === "start" ?WORKFLOW_DIALOG_COPY.noToolCallsYet : WORKFLOW_DIALOG_COPY.noToolCalls;
 }
 
 /** What the Outcome body says, which is a different sentence for every state. */
@@ -570,7 +517,6 @@ function outcomeBody(entry: WorkflowAgentEntry, state: WorkflowDisplayState): st
     case "running":
       return WORKFLOW_DIALOG_COPY.notAvailableYet;
     case "failed":
-    case "blocked":
       return entry.error ?? WORKFLOW_DIALOG_COPY.noTranscript;
     case "done":
       return entry.resultPreview ?? WORKFLOW_DIALOG_COPY.noTranscript;
@@ -589,7 +535,7 @@ function outcomeBody(entry: WorkflowAgentEntry, state: WorkflowDisplayState): st
  * start again, so it begins only once one exists. Once the call has settled its
  * value is already the script's, and there is nothing either key could change.
  */
-export function agentActions(
+function agentActions(
   entry: WorkflowAgentEntry | undefined,
   workflowActive: boolean,
 ): { skip: boolean; retry: boolean } {
@@ -604,7 +550,6 @@ function statusWord(state: WorkflowDisplayState): string {
     case "done": return "Completed";
     case "failed": return "Failed";
     case "skipped": return "Skipped";
-    case "blocked": return "Blocked";
     case "queued": return "Queued";
     case "interrupted": return "Stopped";
     case "running": return "Running";
@@ -649,20 +594,17 @@ function agentRow(options: {
   // stat tail, and clamping one would just spend columns on a truncated word.
   if (options.compact) return clampLine(head, width);
 
-  const model = formatModel(entry);
-  if (model) head.push({ text: ` ${model}`, color: "dim" });
-  for (const part of [...subStatusAnnotations(entry, display, options.now), ...rowStatSegments(entry)]) {
+  if (entry.model) head.push({ text: ` ${entry.model}`, color: "dim" });
+  // The dot-separated tail. The model is not in it — it leads.
+  const parts = subStatusAnnotations(entry, display, options.now);
+  if (entry.tokens) parts.push(`${formatCompactTokens(entry.tokens)} tok`);
+  for (const part of parts) {
     head.push({ text: " · ", color: "dim" }, { text: part, color: "dim" });
   }
   // The duration sits flush right, so a column of rows reads as a column of
   // durations rather than as ragged text.
   const duration = entry.durationMs ? [{ text: `${formatDuration(entry.durationMs)} `, color: "dim" as const }] : [];
   return duration.length > 0 ? rightAlign(head, duration, width) : clampLine(head, width);
-}
-
-/** The agent row's dot-separated tail. The model is not in it — it leads. */
-function rowStatSegments(entry: WorkflowAgentEntry): string[] {
-  return entry.tokens ? [`${formatCompactTokens(entry.tokens)} tok`] : [];
 }
 
 /**
@@ -675,14 +617,14 @@ function rowStatSegments(entry: WorkflowAgentEntry): string[] {
  * different sizes.
  */
 export function layoutWorkflowDialog(input: WorkflowDialogInput): WorkflowCardLine[] {
-  const glyphs = input.ascii ? ASCII_DIALOG_GLYPHS : UNICODE_DIALOG_GLYPHS;
+  const glyphs = UNICODE_DIALOG_GLYPHS;
   const width = workflowDialogContentWidth(input.width ?? DEFAULT_WIDTH);
   const now = input.now ?? Date.now();
   const view = resolveWorkflowDialog(input);
   const { state } = input;
   // What the panes may *hold*; the frame's actual height is settled below, once
   // there is something to measure.
-  const capacity = Math.max(MIN_PANE_BODY_ROWS, input.bodyRows ?? DEFAULT_PANE_BODY_ROWS);
+  const capacity = DEFAULT_PANE_BODY_ROWS;
   const spinnerFrame = input.spinnerFrame ?? 0;
 
   const lines: WorkflowCardLine[] = [];
@@ -769,7 +711,7 @@ export function layoutWorkflowDialog(input: WorkflowDialogInput): WorkflowCardLi
     const display = displayState(entry, view.workflowActive);
     // Prefers the canonical `provider/model-id` here — two providers can serve
     // models whose short names read alike, and this pane has the width for it.
-    const model = formatModel(entry, { canonical: true });
+    const model = entry.modelId ?? entry.model;
     detailRows.push(
       clampLine(
         [
@@ -791,7 +733,7 @@ export function layoutWorkflowDialog(input: WorkflowDialogInput): WorkflowCardLi
     const thinking = formatThinking(entry);
     if (thinking) stats.push(thinking);
     if (entry.tokens) stats.push(`${formatCompactTokens(entry.tokens)} tok`);
-    if (entry.toolCalls) stats.push(`${entry.toolCalls} tool call${entry.toolCalls === 1 ? "" : "s"}`);
+    if (entry.toolCalls) stats.push(formatToolCalls(entry.toolCalls));
     if (entry.durationMs) stats.push(formatDuration(entry.durationMs));
     if (stats.length > 0) {
       detailRows.push(clampLine([{ text: ` ${stats.join(" · ")}`, color: "dim" }], rightWidth));
@@ -823,7 +765,7 @@ export function layoutWorkflowDialog(input: WorkflowDialogInput): WorkflowCardLi
     detailRows.push(
       detailHeading(
         "Activity",
-        toolCalls > 0 ? [`${toolCalls} tool call${toolCalls === 1 ? "" : "s"}`] : [],
+        toolCalls > 0 ? [formatToolCalls(toolCalls)] : [],
         rightWidth,
       ),
     );
@@ -846,17 +788,18 @@ export function layoutWorkflowDialog(input: WorkflowDialogInput): WorkflowCardLi
     state.filter === "all" ?
       `${phaseTitle} · ${shown} agent${shown === 1 ? "" : "s"}`
     : `${phaseTitle} · ${shown} ${state.filter}`;
-  // Indented one column, so the frame's left edge lines up under the name and
-  // the description rather than hanging off the edge of them.
   const leftRows = inPhases ? phaseRows : agentRows;
   const rightRows = inPhases ? agentRows : detailRows;
+  // Indented one column, so the frame's left edge lines up under the name and
+  // the description rather than hanging off the edge of them.
   lines.push(
     ...paneFrame({
       leftTitle: inPhases ? "Phases" : agentPaneTitle,
       rightTitle: inPhases ? agentPaneTitle : (entry?.label ?? WORKFLOW_DIALOG_COPY.noAgents),
       leftRows,
       rightRows,
-      width: width - 1,
+      leftWidth,
+      rightWidth,
       // Tall enough for whichever pane holds more, and no taller. Both panes
       // were built against `capacity`, so neither can exceed it and nothing
       // measured here is ever cut by the frame it is sizing.
@@ -937,13 +880,11 @@ export function handleWorkflowDialogKey(
   // Back one level before out of the dialog: `esc` in the subview returns to
   // the overview, and only closes from there. Anything else would make a wrong
   // turn cost the whole dialog.
-  if (matchesKey(data, "escape") || matchesKey(data, "q")) {
-    if (state.level === "agent") return { state: { ...state, level: "phases", promptExpanded: false } };
-    return { state, action: { kind: "cancel" } };
-  }
-  if (matchesKey(data, "left") && state.level === "agent") {
+  const back = matchesKey(data, "escape") || matchesKey(data, "q");
+  if ((back || matchesKey(data, "left")) && state.level === "agent") {
     return { state: { ...state, level: "phases", promptExpanded: false } };
   }
+  if (back) return { state, action: { kind: "cancel" } };
 
   const down = matchesKey(data, "j") || matchesKey(data, "down");
   const up = matchesKey(data, "k") || matchesKey(data, "up");
@@ -960,16 +901,14 @@ export function handleWorkflowDialogKey(
 
   // One key, two jobs, because the two levels are what it means at each: open
   // the selected phase's agents, then expand the prompt of the one you opened.
-  if (matchesKey(data, "enter") || matchesKey(data, "right")) {
-    if (state.level === "phases") {
-      // Nothing to open, so nothing happens — entering an empty pane would
-      // strand the reader in a subview with no rows and no detail.
-      if (view.visibleAgents.length === 0) return { state };
-      return { state: { ...state, level: "agent", promptExpanded: false } };
-    }
-    return { state: { ...state, promptExpanded: !state.promptExpanded } };
+  const enter = matchesKey(data, "enter") || matchesKey(data, "right");
+  if (enter && state.level === "phases") {
+    // Nothing to open, so nothing happens — entering an empty pane would
+    // strand the reader in a subview with no rows and no detail.
+    if (view.visibleAgents.length === 0) return { state };
+    return { state: { ...state, level: "agent", promptExpanded: false } };
   }
-  if (matchesKey(data, "e")) {
+  if (enter || matchesKey(data, "e")) {
     return { state: { ...state, promptExpanded: !state.promptExpanded } };
   }
 
@@ -1011,11 +950,6 @@ export function handleWorkflowDialogKey(
  * Rendering
  * ------------------------------------------------------------------------- */
 
-/** The dialog as plain text — what the layout tests assert against. */
-export function plainWorkflowDialogLines(lines: readonly WorkflowCardLine[]): string[] {
-  return lines.map(line => line.map(segment => segment.text).join(""));
-}
-
 /**
  * The `/agents → Workflows` overlay.
  *
@@ -1035,9 +969,8 @@ export class WorkflowDialog implements Component {
     private theme: Theme,
     private done: (result: undefined) => void,
     private actions: WorkflowDialogActions = {},
-    initialPhaseIndex = 0,
   ) {
-    this.state = initialWorkflowDialogState(initialPhaseIndex);
+    this.state = initialWorkflowDialogState();
     this.timer = setInterval(() => {
       this.spinnerFrame++;
       if (!this.closed) this.tui.requestRender();

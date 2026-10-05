@@ -1,12 +1,9 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import {
-  ASCII_GLYPHS,
   agentStatSegments,
-  formatModel,
   formatThinking,
   layoutWorkflowCard,
-  plainWorkflowCardLines,
   renderWorkflowCard,
   styleWorkflowCardLines,
   type WorkflowCardInput,
@@ -14,6 +11,7 @@ import {
 } from "../src/ui/workflow-card.js";
 import type { WorkflowMeta } from "../src/workflow/meta.js";
 import type { WorkflowAgentEntry, WorkflowEntry } from "../src/workflow/progress.js";
+import { plainWorkflowLines } from "./helpers/workflow-lines.js";
 
 const START = 1_000_000;
 
@@ -40,7 +38,7 @@ function card(over: Partial<WorkflowCardInput> & { progress: readonly WorkflowEn
     startTime: START,
     ...over.task,
   };
-  return plainWorkflowCardLines(
+  return plainWorkflowLines(
     layoutWorkflowCard({ width: 120, now: START + 1000, ...over, task }),
   );
 }
@@ -53,7 +51,6 @@ describe("inline glyph mapping", () => {
     agentEntry({ index: 0, label: "done", state: "done" }),
     agentEntry({ index: 1, label: "failed", state: "error" }),
     agentEntry({ index: 2, label: "started", state: "start" }),
-    agentEntry({ index: 3, label: "progressing", state: "progress" }),
   ];
 
   it("keys off the raw entry state, not the display state", () => {
@@ -61,7 +58,6 @@ describe("inline glyph mapping", () => {
     expect(rows[0]).toContain("✔ done");
     expect(rows[1]).toContain("✘ failed");
     expect(rows[2]).toContain("⟳ started");
-    expect(rows[3]).toContain("⟳ progressing");
   });
 
   it("does not use the /workflows dialog's queued glyph for a queued agent", () => {
@@ -93,16 +89,11 @@ describe("inline glyph mapping", () => {
     expect(treeRows(lines)[1]).not.toContain("resume journal");
   });
 
-  it("renders a skipped and a blocked agent as a plain cross (the dialog splits them, this does not)", () => {
+  it("renders a skipped agent as a plain cross (the dialog splits it out, this does not)", () => {
     const lines = card({
-      progress: [
-        agentEntry({ index: 0, label: "skipped", state: "error", skipped: true }),
-        agentEntry({ index: 1, label: "blocked", state: "error", blocked: true }),
-      ],
+      progress: [agentEntry({ index: 0, label: "skipped", state: "error", skipped: true })],
     });
-    const rows = treeRows(lines).slice(1);
-    expect(rows[0]).toContain("✘ skipped");
-    expect(rows[1]).toContain("✘ blocked");
+    expect(treeRows(lines)[1]).toContain("✘ skipped");
   });
 
   it("colours done success, error error, and leaves a running row at the terminal default", () => {
@@ -193,10 +184,6 @@ describe("tree branches", () => {
 // effective one, never silently replaced by it. Same rule `buildInvocationTags`
 // applies everywhere else.
 describe("effective-vs-requested disclosure", () => {
-  it("names the model alone when the request was honoured", () => {
-    expect(formatModel(agentEntry({ index: 0, model: "haiku 4.5" }))).toBe("haiku 4.5");
-  });
-
   it("discloses a thinking level pi clamped", () => {
     expect(
       formatThinking(agentEntry({ index: 0, thinking: "low", requestedThinking: "max" })),
@@ -243,16 +230,6 @@ describe("stat segments", () => {
     expect(agentStatSegments(agentEntry({ index: 0, toolCalls: 1 }))).toEqual(["1 tool call"]);
   });
 
-  it("merges the fallback model into the model segment", () => {
-    expect(agentStatSegments(agentEntry({ index: 0, model: "haiku", fallbackModel: "sonnet" }))).toEqual([
-      "haiku→sonnet",
-    ]);
-    expect(agentStatSegments(agentEntry({ index: 0, model: "haiku", fallbackModel: "haiku" }))).toEqual([
-      "haiku",
-    ]);
-    expect(agentStatSegments(agentEntry({ index: 0, fallbackModel: "sonnet" }))).toEqual(["sonnet"]);
-  });
-
   it("renders the segments · separated after the label", () => {
     const rows = treeRows(
       card({
@@ -287,34 +264,6 @@ describe("stat segments", () => {
       .map(l => l.indexOf(" · "));
     expect(columns).toHaveLength(2);
     expect(columns[0]).toBe(columns[1]);
-  });
-});
-
-describe("ASCII fallback tier", () => {
-  it("swaps the tick and cross for √ and ×", () => {
-    const lines = card({
-      ascii: true,
-      progress: [
-        agentEntry({ index: 0, label: "done", state: "done" }),
-        agentEntry({ index: 1, label: "failed", state: "error" }),
-      ],
-    });
-    const joined = lines.join("\n");
-    expect(joined).toContain("√ done");
-    expect(joined).toContain("× failed");
-    expect(joined).not.toContain("✔");
-    expect(joined).not.toContain("✘");
-  });
-
-  it("swaps the box drawing too, keeping each glyph's column width", () => {
-    const joined = card({
-      ascii: true,
-      progress: [agentEntry({ index: 0, label: "x" })],
-    }).join("\n");
-    expect(joined).not.toMatch(/[╭╰├└│⎿▸⟳]/);
-    for (const key of ["groupTop", "groupBottom", "branch", "lastBranch", "running", "tick", "cross"] as const) {
-      expect(visibleWidth(ASCII_GLYPHS[key])).toBeGreaterThan(0);
-    }
   });
 });
 
@@ -456,7 +405,22 @@ describe("size warning", () => {
 });
 
 describe("component rendering", () => {
-  it("themes the card and hands back one Text of the same lines", () => {
+  it("lays the card out at the width it is rendered at", () => {
+    const plain = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+    const input: WorkflowCardInput = {
+      progress: [agentEntry({ index: 0, label: "review:bugs", state: "done", durationMs: 42_000 })],
+      task: { status: "completed", workflowName: "review-changes", startTime: START, endTime: START + 42_000 },
+      now: START + 42_000,
+    };
+    for (const width of [60, 120]) {
+      const header = renderWorkflowCard(input, plain).render(width)[0];
+      // Stats flush to the edge: padding after them would mean another width.
+      expect(header.endsWith("done")).toBe(true);
+      expect(visibleWidth(header)).toBe(width);
+    }
+  });
+
+  it("themes the card and renders the same lines", () => {
     const input: WorkflowCardInput = {
       progress: [
         { type: "workflow_phase", index: 0, title: "Review" },

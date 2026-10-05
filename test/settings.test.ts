@@ -6,7 +6,6 @@ import {
   applyAndEmitLoaded,
   applySettings,
   loadSettings,
-  persistToastFor,
   type SettingsAppliers,
   saveAndEmitChanged,
   saveSettings,
@@ -743,22 +742,6 @@ describe("settings persistence", () => {
     });
   });
 
-  describe("persistToastFor", () => {
-    it("returns info-level toast with the plain message on success", () => {
-      expect(persistToastFor("Max concurrency set to 7", true)).toEqual({
-        message: "Max concurrency set to 7",
-        level: "info",
-      });
-    });
-
-    it("returns warning-level toast with session-only suffix on failure", () => {
-      expect(persistToastFor("Max concurrency set to 7", false)).toEqual({
-        message: "Max concurrency set to 7 (session only; failed to persist)",
-        level: "warning",
-      });
-    });
-  });
-
   describe("applyAndEmitLoaded", () => {
     let appliers: SettingsAppliers;
 
@@ -794,7 +777,7 @@ describe("settings persistence", () => {
       writeProject({ graceTurns: 7 });
       const emit = vi.fn();
 
-      const result = applyAndEmitLoaded(appliers, emit, projectDir);
+      applyAndEmitLoaded(appliers, emit, projectDir);
 
       expect(appliers.setMaxConcurrent).toHaveBeenCalledWith(16);
       expect(appliers.setGraceTurns).toHaveBeenCalledWith(7);
@@ -805,16 +788,14 @@ describe("settings persistence", () => {
       expect(emit).toHaveBeenCalledWith("subagents:settings_loaded", {
         settings: { maxConcurrent: 16, graceTurns: 7 },
       });
-      expect(result).toEqual({ maxConcurrent: 16, graceTurns: 7 });
     });
 
     it("still emits the event when both files are missing (payload carries {})", () => {
       const emit = vi.fn();
 
-      const result = applyAndEmitLoaded(appliers, emit, projectDir);
+      applyAndEmitLoaded(appliers, emit, projectDir);
 
       expect(emit).toHaveBeenCalledWith("subagents:settings_loaded", { settings: {} });
-      expect(result).toEqual({});
       // No setters fired — defaults preserved
       expect(appliers.setMaxConcurrent).not.toHaveBeenCalled();
       expect(appliers.setDefaultMaxTurns).not.toHaveBeenCalled();

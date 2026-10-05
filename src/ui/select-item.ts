@@ -16,7 +16,7 @@
  */
 
 /** Minimal shape of the `ctx.ui` surface this needs. */
-export interface SelectUI {
+interface SelectUI {
   select(title: string, options: string[]): Promise<string | undefined>;
 }
 

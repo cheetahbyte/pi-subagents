@@ -31,12 +31,12 @@ export const WORKFLOW_AGENT_CAP = 1000;
 export const WORKFLOW_ITEM_CAP = 4096;
 
 /** Nested `workflow()` invocations allowed per run. */
-export const WORKFLOW_NESTED_CAP = 256;
+const WORKFLOW_NESTED_CAP = 256;
 
 /** How much of a prompt or result is kept for the UI. */
 const PREVIEW_LENGTH = 200;
 
-export class WorkflowRuntimeError extends Error {}
+class WorkflowRuntimeError extends Error {}
 
 /**
  * Concurrent agents allowed, leaving two cores for the host and the TUI.
@@ -52,8 +52,6 @@ export function workflowConcurrency(cpuCount: number = cpus().length): number {
 /** One agent the script asked for. `agentId` is the handle for {@link WorkflowHost.abortAgent}. */
 export interface WorkflowSpawnRequest {
   agentId: string;
-  /** Position in the run, and the progress entry's stable identity. */
-  index: number;
   prompt: string;
   label: string;
   agentType: string;
@@ -104,8 +102,6 @@ export interface WorkflowSpawnRequest {
    * runtime can re-check the answer without re-parsing the schema per call.
    */
   schema?: CompiledSchema;
-  phaseIndex?: number;
-  phaseTitle?: string;
   /**
    * The `gate` command this agent is being spawned under, when it has one.
    *
@@ -135,8 +131,6 @@ export interface WorkflowSpawnResult {
    * budget counts output, and a fan-out's re-sent input would swamp it.
    */
   outputTokens?: number;
-  /** Whether the child needed an extra prompt to produce its structured answer. */
-  structuredRetried?: boolean;
   toolCalls?: number;
   /**
    * Where the child actually ran.
@@ -169,17 +163,17 @@ export interface WorkflowGateResult {
   output: string;
 }
 
-/** The one seam between a workflow and the rest of the extension. */
 /** How a script names another workflow: a saved name, or a path to a file. */
 export interface WorkflowScriptRef {
   name?: string;
   scriptPath?: string;
 }
 
-export type WorkflowScriptSource =
-  | { ok: true; script: string; path?: string }
+type WorkflowScriptSource =
+  | { ok: true; script: string }
   | { ok: false; message: string };
 
+/** The one seam between a workflow and the rest of the extension. */
 export interface WorkflowHost {
   spawnAgent(request: WorkflowSpawnRequest): Promise<WorkflowSpawnResult>;
   /** Called for every in-flight agent when the run aborts. */
@@ -244,7 +238,6 @@ export interface WorkflowControl {
    */
   pause(): void;
   resume(): void;
-  isPaused(): boolean;
   /**
    * Give up on the agent at `index`: its `agent()` call returns `null`, exactly
    * as a terminal failure does, and the row renders skipped.
@@ -449,7 +442,7 @@ type WorkerMessage =
   | { type: "call"; callId: number; method: string; payload: AgentCallPayload }
   | { type: "progress"; entries: WorkflowEntry[] }
   | { type: "complete"; resultJson?: string }
-  | { type: "error"; message: string; stack?: string };
+  | { type: "error"; message: string };
 
 /** Everything below 0x20 except tab, newline and carriage return, plus DEL. */
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
@@ -479,20 +472,6 @@ interface CompletedChild {
 }
 
 /**
- * Turn a failing gate into a failing agent.
- *
- * Deliberately no new state, no new entry type: a gated agent whose command
- * fails is *a failed agent*, so the card, the dialog and `agent()`'s `null`
- * return all handle it with the code they already have. The command output
- * becomes the error, because that is the thing worth reading.
- *
- * The single place that decides whether a gate passed. The command may have
- * been run by the host instead (inside a worktree that no longer exists by
- * now), but only ever by one of the two: a host that ran it says so with
- * `result.gate`, and this then shapes that outcome rather than running it
- * again.
- */
-/**
  * Hold a schema'd result to its schema, host-side.
  *
  * The child's own tool already validated whatever it passed, so this normally
@@ -521,6 +500,20 @@ function applySchema(result: WorkflowSpawnResult, compiled: CompiledSchema): Wor
   };
 }
 
+/**
+ * Turn a failing gate into a failing agent.
+ *
+ * Deliberately no new state, no new entry type: a gated agent whose command
+ * fails is *a failed agent*, so the card, the dialog and `agent()`'s `null`
+ * return all handle it with the code they already have. The command output
+ * becomes the error, because that is the thing worth reading.
+ *
+ * The single place that decides whether a gate passed. The command may have
+ * been run by the host instead (inside a worktree that no longer exists by
+ * now), but only ever by one of the two: a host that ran it says so with
+ * `result.gate`, and this then shapes that outcome rather than running it
+ * again.
+ */
 async function applyGate(
   result: WorkflowSpawnResult,
   command: string,
@@ -552,14 +545,6 @@ function unawaitedLaunchMessage(labels: readonly string[]): string {
 }
 
 /**
- * Run one workflow script to completion.
- *
- * Rejects before starting for a script that cannot run at all (bad `meta`, over
- * the size limit, control characters, non-JSON `args`). Everything after the
- * worker is live resolves instead, carrying the failure in `status` — by then
- * there is a progress log worth handing back.
- */
-/**
  * Everything a script must satisfy before it is compiled.
  *
  * Extracted so a nested `workflow()` is held to exactly the same standard as a
@@ -567,7 +552,7 @@ function unawaitedLaunchMessage(labels: readonly string[]): string {
  * The host resolves a reference to source; deciding whether that source is a
  * workflow stays here, where the rules live.
  */
-export function validateScript(script: string): { meta: WorkflowMeta; body: string } {
+function validateScript(script: string): { meta: WorkflowMeta; body: string } {
   if (script.length > MAX_SCRIPT_LENGTH) {
     throw new WorkflowRuntimeError(
       `Workflow script is ${script.length} characters, over the limit of ${MAX_SCRIPT_LENGTH}.`,
@@ -581,6 +566,14 @@ export function validateScript(script: string): { meta: WorkflowMeta; body: stri
   return extractMeta(script);
 }
 
+/**
+ * Run one workflow script to completion.
+ *
+ * Rejects before starting for a script that cannot run at all (bad `meta`, over
+ * the size limit, control characters, non-JSON `args`). Everything after the
+ * worker is live resolves instead, carrying the failure in `status` — by then
+ * there is a progress log worth handing back.
+ */
 export async function runWorkflow(options: RunWorkflowOptions): Promise<WorkflowRunResult> {
   const { script, host } = options;
 
@@ -606,13 +599,17 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
    */
   const openLaunches = new Map<number, string>();
   let agentCount = 0;
-  let aborted = false;
   let settled = false;
 
   /* --- resume state ---------------------------------------------------- */
 
   const journalEntries = options.journal?.entries ?? [];
   const recordJournal = options.journal?.append;
+  // A journal from a run that used `agent({ resume })` is declined whole: see
+  // journal.ts on why a replayed agent leaves nothing for a later resume to
+  // continue. Declining up front beats stranding the first `resume` call
+  // partway through a run that has already spent its cheap half.
+  const journalResumes = journalEntries.some(entry => entry.resumed);
   /**
    * Whether the replayable prefix is still intact.
    *
@@ -620,11 +617,6 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
    * recorded there — every later call runs live, however well it matches.
    * See the header of journal.ts for why this is a prefix and not a lookup.
    */
-  // A journal from a run that used `agent({ resume })` is declined whole: see
-  // journal.ts on why a replayed agent leaves nothing for a later resume to
-  // continue. Declining up front beats stranding the first `resume` call
-  // partway through a run that has already spent its cheap half.
-  const journalResumes = journalEntries.some(entry => entry.resumed);
   let prefixIntact = journalEntries.length > 0 && !journalResumes;
   let replayedCount = 0;
 
@@ -659,8 +651,6 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
   let spentOutputTokens = 0;
 
   let paused = false;
-  /** Read through a call for the same reason `intent()` is — see below. */
-  const isPaused = () => paused;
   const pauseWaiters = new Set<() => void>();
   /** Release everyone held at a pause — on resume, and on the way out. */
   function releasePause(): void {
@@ -669,7 +659,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
   }
   /** Park here while the run is paused, so no new agent is started. */
   function pauseGate(live: LiveAgent): Promise<void> {
-    if (!paused || aborted || settled) return Promise.resolve();
+    if (!paused || settled) return Promise.resolve();
     return new Promise<void>(resolve => {
       const wake = () => {
         pauseWaiters.delete(wake);
@@ -684,7 +674,6 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
   options.onControl?.({
     pause: () => { paused = true; },
     resume: () => { paused = false; releasePause(); },
-    isPaused: () => paused,
     skip: index => {
       const live = liveAgents.get(index);
       if (live === undefined || live.intent !== undefined) return false;
@@ -762,7 +751,6 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
     };
 
     function onAbort() {
-      aborted = true;
       // terminate() is why this runs in a worker at all: it stops a script that
       // is spinning or wedged mid-await, which an in-process vm cannot do.
       finish({ status: "killed", error: "Workflow aborted." });
@@ -880,7 +868,8 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         ...payload,
         schema: payload.schema !== undefined ? JSON.stringify(payload.schema) : undefined,
       };
-      let replayed = replayAt(index, journalKey(keyInput));
+      const key = journalKey(keyInput);
+      let replayed = replayAt(index, key);
       // A replayed answer still has to satisfy the schema. The key covers a
       // schema that *changed*, but not a journal that was hand-edited, and not
       // the empty text a torn entry leaves behind — either would hand the
@@ -911,16 +900,14 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             resultPreview: preview(replayedText),
           },
         ]);
-        openLaunches.delete(callId);
         // Re-recorded so this run's journal is complete on its own terms: a
         // resume of a resume must not have to walk back through a chain of
         // earlier files to find the prefix.
-        recordJournal?.({ index, key: replayed.key, ok: true, text: replayedText });
+        recordJournal?.({ index, key, ok: true, text: replayedText });
         respond(callId, true, replayedText);
         return;
       }
 
-      const key = journalKey(keyInput);
       const resumeMark = payload.resume !== undefined ? ({ resumed: true } as const) : {};
 
       /** A skip the user asked for, before the child ever started. */
@@ -952,7 +939,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           // A resumed agent waits its turn like any other: it is the same amount of
           // model running at once.
           await semaphore.acquire();
-          if (aborted || settled) {
+          if (settled) {
             semaphore.release();
             respond(callId, false, undefined, "Workflow aborted.", true);
             return;
@@ -961,7 +948,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           // permit when the pause landed, so it never passed the gate above.
           // Hand the permit back and go wait at the gate like everything else,
           // or a pause would leak exactly as many agents as were queued.
-          if (isPaused() && !aborted && !settled) {
+          if (paused) {
             semaphore.release();
             continue;
           }
@@ -1016,7 +1003,6 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
                 ? await resumeAgent(resumed.agentId, payload.prompt, onResolved)
                 : await host.spawnAgent({
                     agentId,
-                    index,
                     prompt: payload.prompt,
                     label,
                     agentType,
@@ -1024,8 +1010,6 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
                     ...(payload.effort !== undefined ? { effort: payload.effort } : {}),
                     ...(compiledSchema !== undefined ? { schema: compiledSchema } : {}),
                     ...(isolation !== undefined ? { isolation } : {}),
-                    ...(payload.phaseIndex !== undefined ? { phaseIndex: payload.phaseIndex } : {}),
-                    ...(payload.phaseTitle !== undefined ? { phaseTitle: payload.phaseTitle } : {}),
                     // Offered, not delegated: a host that can run it inside the
                     // child's worktree does, and hands back `result.gate`.
                     ...(payload.gate !== undefined ? { gate: payload.gate } : {}),
@@ -1049,7 +1033,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
               // verifies work and there is no work to verify if the shape is
               // wrong — and the reader should see the schema error, not a gate
               // error standing in front of it.
-              if (compiledSchema !== undefined && result.ok) {
+              if (compiledSchema !== undefined) {
                 result = applySchema(result, compiledSchema);
               }
               if (result.ok && payload.gate !== undefined && runGate !== undefined) {
@@ -1066,20 +1050,26 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 
           if (settled) return;
 
+          // Counted before the response is sent, so the very call that spent
+          // them already sees them in `budget.spent()`. Failed, skipped and
+          // retried attempts count too — they burned the tokens either way.
+          spentOutputTokens += result.outputTokens ?? 0;
+
           // The stop that produced this result was ours, so run the same call
           // again rather than reporting it. The script is still awaiting this
           // `agent()`, which is the only reason a retry can mean anything.
-          if (intent() === "retry" && !aborted) {
+          if (intent() === "retry") {
             live.intent = undefined;
             attempt++;
             emit([{ ...base, queuedAt, attempt, lastAttemptReason: "user-retry" }]);
             continue;
           }
 
-          // Counted before the response is sent, so the very call that spent
-          // them already sees them in `budget.spent()`. Failed and skipped
-          // agents count too — they burned the tokens either way.
-          spentOutputTokens += result.outputTokens ?? 0;
+          // A skip that landed after the child finished (its gate was still
+          // running) had nothing left to stop, but the user still asked for it.
+          if (intent() === "skip" && result.ok) {
+            result = { ...result, ok: false, skipped: true, error: "Skipped." };
+          }
 
           const finishedAt = Date.now();
           const common = {
@@ -1179,7 +1169,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             respond(message.callId, false, undefined, `Unknown workflow host method "${message.method}".`, true);
             break;
           }
-          void handleAgent(message.callId, message.payload as AgentCallPayload);
+          void handleAgent(message.callId, message.payload);
           break;
         case "complete": {
           // The script is done, so every launch it made should have been

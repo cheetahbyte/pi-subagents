@@ -27,7 +27,7 @@ import { ctx, flush, type Hermetic, hermeticDir, makePi } from "./helpers/boot-e
 function runSpending(usage: { input: number; output: number; cacheWrite: number; cacheRead?: number; cost?: number }) {
   vi.mocked(runAgent).mockImplementation(async (_c: any, _t: any, _p: any, opts: any) => {
     opts.onAssistantUsage?.(usage);
-    return { responseText: "done", session: { dispose: vi.fn(), messages: [] } as any, aborted: false, steered: false };
+    return { responseText: "done", session: { dispose: vi.fn(), messages: [], subscribe: () => () => {} } as any, aborted: false, steered: false };
   });
 }
 

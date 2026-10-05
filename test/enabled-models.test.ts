@@ -202,5 +202,11 @@ describe("resolveEnabledModels", () => {
       expect(result!.has("anthropic/claude-sonnet-4-6".toLowerCase())).toBe(false); // not available
       expect(result!.has("google/gemma-4-31b-it".toLowerCase())).toBe(true);
     });
+
+    it("follows the registry when availability changes between calls", () => {
+      const patterns = ["anthropic/claude-opus-4-5"];
+      expect(resolveEnabledModels(patterns, makeRegistry(MODELS, []))).toBeUndefined();
+      expect(resolveEnabledModels(patterns, makeRegistry())).toEqual(new Set(["anthropic/claude-opus-4-5"]));
+    });
   });
 });

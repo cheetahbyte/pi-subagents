@@ -18,7 +18,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { AGENT_QUESTION_TOOL_NAMES, createAskParentTool } from "./agent-question-tools.js";
-import { BUILTIN_TOOL_NAMES, getAgentConfig, getConfig, getMemoryToolNames, getReadOnlyMemoryToolNames, getToolNamesForType } from "./agent-types.js";
+import { BUILTIN_TOOL_NAMES, getAgentConfig, getConfig, getToolNamesForType } from "./agent-types.js";
 import { runInChildSessionContext } from "./child-context.js";
 import { buildParentContext, extractText } from "./context.js";
 import { DEFAULT_AGENTS } from "./default-agents.js";
@@ -27,7 +27,7 @@ import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.js";
 import { createNestedSubagentTools, getMaxSubagentDepth, type NestedAgentManager } from "./nested-tools.js";
 import { buildAgentPrompt, type PromptExtras } from "./prompts.js";
 import { preloadSkills } from "./skill-loader.js";
-import { createStructuredCapture, createStructuredOutputTool, structuredRetryPrompt } from "./structured-output.js";
+import { createStructuredOutputTool, type StructuredCapture, structuredRetryPrompt } from "./structured-output.js";
 import type { SubagentType, ThinkingLevel } from "./types.js";
 import type { LifetimeUsage } from "./usage.js";
 import type { CompiledSchema } from "./workflow/json-schema.js";
@@ -383,8 +383,8 @@ export function getGraceTurns(): number { return graceTurns; }
 export function setGraceTurns(n: number): void { graceTurns = Math.max(1, n); }
 
 /**
- * Try to find the right model for an agent type.
- * Priority: explicit option > config.model > parent model.
+ * Try to find the right model for an agent type: `config.model` when it
+ * resolves and is available, else the parent model.
  */
 export function resolveDefaultModel(
   parentModel: Model<any> | undefined,
@@ -396,17 +396,9 @@ export function resolveDefaultModel(
     if (slashIdx !== -1) {
       const provider = configModel.slice(0, slashIdx);
       const modelId = configModel.slice(slashIdx + 1);
-
-      // Build a set of available model keys for fast lookup
       const available = registry.getAvailable?.();
-      const availableKeys = available
-        ? new Set(available.map((m: any) => `${m.provider}/${m.id}`))
-        : undefined;
-      const isAvailable = (p: string, id: string) =>
-        !availableKeys || availableKeys.has(`${p}/${id}`);
-
       const found = registry.find(provider, modelId);
-      if (found && isAvailable(provider, modelId)) return found;
+      if (found && (!available || available.some((m) => m.provider === provider && m.id === modelId))) return found;
     }
   }
 
@@ -419,7 +411,7 @@ export interface ToolActivity {
   toolName: string;
 }
 
-export interface RunOptions {
+interface RunOptions {
   /** ExtensionAPI instance — used for pi.exec() instead of execSync. */
   pi: ExtensionAPI;
   /** Manager-assigned id; suffixes session name to disambiguate parallel spawns (e.g. `Explore#a1b2c3d4`). */
@@ -616,10 +608,6 @@ function finalTurnError(session: AgentSession, startIndex = 0): string | undefin
   return undefined;
 }
 
-/**
- * Wire an AbortSignal to abort a session.
- * Returns a cleanup function to remove the listener.
- */
 type RunEventCallbacks = Pick<RunOptions, "onToolActivity" | "onAssistantUsage" | "onCompaction">;
 
 /** The session events both a run and a resume report to their caller. */
@@ -641,8 +629,13 @@ function forwardRunEvents(event: AgentSessionEvent, options: RunEventCallbacks):
   }
 }
 
+/**
+ * Wire an AbortSignal to abort a session.
+ * Returns a cleanup function to remove the listener.
+ */
 function forwardAbortSignal(session: AgentSession, signal?: AbortSignal): () => void {
-  if (!signal) return () => {};
+  // An already-aborted signal never fires again; callers skip the prompt instead.
+  if (!signal || signal.aborted) return () => {};
   const onAbort = () => session.abort();
   signal.addEventListener("abort", onAbort, { once: true });
   return () => signal.removeEventListener("abort", onAbort);
@@ -705,17 +698,10 @@ export async function runAgent(
     const effectivelyHas = (name: string) => existingNames.has(name) && !denied?.has(name);
     const hasWriteTools = effectivelyHas("write") || effectivelyHas("edit");
 
-    if (hasWriteTools) {
-      // Read-write memory: add any missing memory tool names (read/write/edit)
-      const extraNames = getMemoryToolNames(existingNames);
-      if (extraNames.length > 0) toolNames = [...toolNames, ...extraNames];
-      extras.memoryBlock = buildMemoryBlock(agentConfig.name, agentConfig.memory, configCwd);
-    } else {
-      // Read-only memory: only add read tool name, use read-only prompt
-      const extraNames = getReadOnlyMemoryToolNames(existingNames);
-      if (extraNames.length > 0) toolNames = [...toolNames, ...extraNames];
-      extras.memoryBlock = buildReadOnlyMemoryBlock(agentConfig.name, agentConfig.memory, configCwd);
-    }
+    // Read-write memory needs read/write/edit; read-only memory needs only read.
+    const memoryTools = hasWriteTools ? ["read", "write", "edit"] : ["read"];
+    toolNames = [...toolNames, ...memoryTools.filter((n) => !existingNames.has(n))];
+    extras.memoryBlock = (hasWriteTools ? buildMemoryBlock : buildReadOnlyMemoryBlock)(agentConfig.name, agentConfig.memory, configCwd);
   }
 
   // Build system prompt from agent config
@@ -931,7 +917,7 @@ export async function runAgent(
   // StructuredOutput, and `structuredJson` below is what the caller reads. The
   // schema was already compiled by whoever asked for it, so a bad one failed
   // before any of this ran.
-  const structuredCapture = options.structuredOutput ? createStructuredCapture() : undefined;
+  const structuredCapture: StructuredCapture | undefined = options.structuredOutput ? {} : undefined;
   const structuredTools = options.structuredOutput && structuredCapture
     ? [createStructuredOutputTool(options.structuredOutput, structuredCapture)]
     : [];
@@ -1035,23 +1021,14 @@ export async function runAgent(
         })
       : SessionManager.inMemory(effectiveCwd);
 
-  // Pi 0.80.8 replaced createAgentSession's modelRegistry option with
-  // modelRuntime, but ExtensionContext still exposes only the registry facade.
-  // Pass both so the full supported Pi range retains the parent's providers.
+  // createAgentSession takes the runtime, but ExtensionContext exposes only
+  // the registry facade over it.
   const parentModelRuntime = (ctx.modelRegistry as unknown as { runtime?: unknown }).runtime;
-  const sessionOpts: Parameters<typeof createAgentSession>[0] & {
-    modelRegistry: ExtensionContext["modelRegistry"];
-    modelRuntime?: unknown;
-  } = {
+  const sessionOpts: Parameters<typeof createAgentSession>[0] = {
     cwd: effectiveCwd,
     agentDir,
     sessionManager,
     settingsManager,
-    modelRegistry: ctx.modelRegistry,
-    // `as never` is what keeps this assignable across the supported Pi range:
-    // pre-0.80.8 the field exists only via the `modelRuntime?: unknown` shim
-    // above, while newer Pi types it as `ModelRuntime` — a shape an opaque
-    // `unknown` read off the private facade field can never satisfy.
     ...(parentModelRuntime !== undefined && { modelRuntime: parentModelRuntime as never }),
     model,
     tools: sessionTools,
@@ -1073,9 +1050,7 @@ export async function runAgent(
   );
 
   // Bind extensions so that session_start fires and extensions can initialize
-  // (e.g. loading credentials, setting up state). Tool gating already happened
-  // at session construction via the `tools:` allowlist above — no separate
-  // post-bind filter is needed. All ExtensionBindings fields are optional.
+  // (e.g. loading credentials, setting up state). All ExtensionBindings fields are optional.
   await session.bindExtensions({
     onError: (err) => {
       options.onToolActivity?.({
@@ -1113,7 +1088,7 @@ export async function runAgent(
   let timedOut = false;
   const wrapUp = (limit: "turn" | "time") => {
     wrapUpTurn = turnCount;
-    session.steer(`You have reached your ${limit} limit. Wrap up immediately — provide your final answer now.`);
+    session.steer(`You have reached your ${limit} limit. Wrap up immediately — provide your final answer now.`).catch(() => {});
   };
   const hardAbort = () => {
     aborted = true;
@@ -1166,7 +1141,8 @@ export async function runAgent(
     timeoutGrace = setTimeout(hardAbort, TIMEOUT_GRACE_MS);
   }, agentConfig.timeoutMs);
   try {
-    await session.prompt(effectivePrompt);
+    // An abort that fired during startup had no listener to reach: never start the run.
+    if (options.signal?.aborted !== true) await session.prompt(effectivePrompt);
 
     // One more prompt when a schema was asked for and nothing usable came back
     // — the model answered in prose, or only ever called the tool invalidly.
@@ -1227,7 +1203,7 @@ export async function resumeAgent(
     : () => {};
 
   try {
-    await session.prompt(prompt);
+    if (options.signal?.aborted !== true) await session.prompt(prompt);
   } finally {
     collector.unsubscribe();
     unsubEvents();
@@ -1238,17 +1214,6 @@ export async function resumeAgent(
     text: collector.getText().trim() || getLastAssistantText(session, startLen),
     failure: finalTurnError(session, startLen),
   };
-}
-
-/**
- * Send a steering message to a running subagent.
- * The message will interrupt the agent after its current tool execution.
- */
-export async function steerAgent(
-  session: AgentSession,
-  message: string,
-): Promise<void> {
-  await session.steer(message);
 }
 
 /**
@@ -1268,7 +1233,7 @@ export function getAgentConversation(session: AgentSession): string {
       const toolCalls: string[] = [];
       for (const c of msg.content) {
         if (c.type === "text" && c.text) textParts.push(c.text);
-        else if (c.type === "toolCall") toolCalls.push(`  Tool: ${(c as any).name ?? (c as any).toolName ?? "unknown"}`);
+        else if (c.type === "toolCall") toolCalls.push(`  Tool: ${c.name}`);
       }
       if (textParts.length > 0) parts.push(`[Assistant]: ${textParts.join("\n")}`);
       if (toolCalls.length > 0) parts.push(`[Tool Calls]:\n${toolCalls.join("\n")}`);

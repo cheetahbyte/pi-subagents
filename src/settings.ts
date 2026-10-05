@@ -328,7 +328,7 @@ export interface SettingsAppliers {
 }
 
 /** Emit callback — a subset of `pi.events.emit` to keep helpers testable. */
-export type SettingsEmit = (event: string, payload: unknown) => void;
+type SettingsEmit = (event: string, payload: unknown) => void;
 
 const VALID_JOIN_MODES: ReadonlySet<string> = new Set<JoinMode>(["async", "group", "smart"]);
 const VALID_TOOL_DESCRIPTION_MODES: ReadonlySet<string> = new Set<ToolDescriptionMode>(["full", "compact", "custom"]);
@@ -349,43 +349,15 @@ function sanitize(raw: unknown): SubagentsSettings {
   if (!raw || typeof raw !== "object") return {};
   const r = raw as Record<string, unknown>;
   const out: SubagentsSettings = {};
-  if (
-    Number.isInteger(r.maxConcurrent) &&
-    (r.maxConcurrent as number) >= 1 &&
-    (r.maxConcurrent as number) <= MAX_CONCURRENT_CEILING
-  ) {
-    out.maxConcurrent = r.maxConcurrent as number;
-  }
+  const intIn = (v: unknown, min: number, max: number): v is number =>
+    Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
+  if (intIn(r.maxConcurrent, 1, MAX_CONCURRENT_CEILING)) out.maxConcurrent = r.maxConcurrent;
   // Floor 0, not 1 like maxConcurrent above: 0 is the documented "unlimited"
   // value and the default, so dropping it would silently be unrepresentable.
-  if (
-    Number.isInteger(r.maxConcurrentForeground) &&
-    (r.maxConcurrentForeground as number) >= 0 &&
-    (r.maxConcurrentForeground as number) <= MAX_CONCURRENT_CEILING
-  ) {
-    out.maxConcurrentForeground = r.maxConcurrentForeground as number;
-  }
-  if (
-    Number.isInteger(r.defaultMaxTurns) &&
-    (r.defaultMaxTurns as number) >= 0 &&
-    (r.defaultMaxTurns as number) <= MAX_TURNS_CEILING
-  ) {
-    out.defaultMaxTurns = r.defaultMaxTurns as number;
-  }
-  if (
-    Number.isInteger(r.graceTurns) &&
-    (r.graceTurns as number) >= 1 &&
-    (r.graceTurns as number) <= GRACE_TURNS_CEILING
-  ) {
-    out.graceTurns = r.graceTurns as number;
-  }
-  if (
-    Number.isInteger(r.maxSubagentDepth) &&
-    (r.maxSubagentDepth as number) >= 0 &&
-    (r.maxSubagentDepth as number) <= SUBAGENT_DEPTH_CEILING
-  ) {
-    out.maxSubagentDepth = r.maxSubagentDepth as number;
-  }
+  if (intIn(r.maxConcurrentForeground, 0, MAX_CONCURRENT_CEILING)) out.maxConcurrentForeground = r.maxConcurrentForeground;
+  if (intIn(r.defaultMaxTurns, 0, MAX_TURNS_CEILING)) out.defaultMaxTurns = r.defaultMaxTurns;
+  if (intIn(r.graceTurns, 1, GRACE_TURNS_CEILING)) out.graceTurns = r.graceTurns;
+  if (intIn(r.maxSubagentDepth, 0, SUBAGENT_DEPTH_CEILING)) out.maxSubagentDepth = r.maxSubagentDepth;
   if (typeof r.defaultJoinMode === "string" && VALID_JOIN_MODES.has(r.defaultJoinMode)) {
     out.defaultJoinMode = r.defaultJoinMode as JoinMode;
   }
@@ -529,33 +501,17 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
 }
 
 /**
- * Format the user-facing toast for a settings mutation. Pure function —
- * routes the success/failure of `saveSettings` into the right message + level
- * so the UI layer (index.ts) stays a thin wire between input and notification.
- */
-export function persistToastFor(
-  successMsg: string,
-  persisted: boolean,
-): { message: string; level: "info" | "warning" } {
-  return persisted
-    ? { message: successMsg, level: "info" }
-    : { message: `${successMsg} (session only; failed to persist)`, level: "warning" };
-}
-
-/**
  * Load merged settings, apply them to in-memory state, and emit the
- * `subagents:settings_loaded` lifecycle event. Returns the loaded settings so
- * callers can log/inspect. Extension init wires this once.
+ * `subagents:settings_loaded` lifecycle event.
  */
 export function applyAndEmitLoaded(
   appliers: SettingsAppliers,
   emit: SettingsEmit,
   cwd: string = process.cwd(),
-): SubagentsSettings {
+): void {
   const settings = loadSettings(cwd);
   applySettings(settings, appliers);
   emit("subagents:settings_loaded", { settings });
-  return settings;
 }
 
 /**
@@ -572,5 +528,7 @@ export function saveAndEmitChanged(
 ): { message: string; level: "info" | "warning" } {
   const persisted = saveSettings(snapshot, cwd);
   emit("subagents:settings_changed", { settings: snapshot, persisted });
-  return persistToastFor(successMsg, persisted);
+  return persisted
+    ? { message: successMsg, level: "info" }
+    : { message: `${successMsg} (session only; failed to persist)`, level: "warning" };
 }

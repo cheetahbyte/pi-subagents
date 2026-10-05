@@ -98,7 +98,7 @@ export interface NestedAgentManager {
   answerQuestion(questionId: string, answer: string, responderAgentId?: string): void;
 }
 
-export interface NestedToolContext {
+interface NestedToolContext {
   manager: NestedAgentManager;
   pi: ExtensionAPI;
   parentAgentId: string;
@@ -201,6 +201,11 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         const existing = context.manager.getRecord(params.resume);
         if (!ownsRecord(existing, context.parentAgentId)) {
           return textResult(`Nested agent not found or not owned by this parent: "${params.resume}".`, true);
+        }
+        // Checked before the flip below: a refused resume must not turn a live
+        // background child into a foreground one.
+        if (existing.status === "running" || existing.status === "queued") {
+          return textResult(`Nested agent "${params.resume}" is still ${existing.status} — it can only be resumed once its current run finishes.`, true);
         }
         // An inline resume is a foreground run: the parent is blocked awaiting
         // it, so the child's ask_parent guard must see it as foreground. A child

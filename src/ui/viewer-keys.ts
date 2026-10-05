@@ -9,7 +9,7 @@
 import { type KeyId, matchesKey } from "@earendil-works/pi-tui";
 
 /** The `tui.select.*` keybinding ids the viewer resolves. */
-export type ViewerScrollKeybinding =
+type ViewerScrollKeybinding =
   | "tui.select.up"
   | "tui.select.down"
   | "tui.select.pageUp"

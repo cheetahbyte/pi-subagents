@@ -9,10 +9,10 @@
  * update carry several agents' changes in one message from the worker.
  *
  * Two vocabularies, deliberately distinct:
- *   - entry `state` is only start | progress | done | error, with `skipped`,
- *     `blocked` and `cached` as separate booleans;
- *   - the display state adds queued, running, interrupted, skipped, blocked and
- *     failed, and is *derived* (see `displayState`).
+ *   - entry `state` is only start | done | error, with `skipped` and `cached`
+ *     as separate booleans;
+ *   - the display state adds queued, running, interrupted, skipped and failed,
+ *     and is *derived* (see `displayState`).
  * Mixing them up is the easiest way to get the rendering wrong, which is why
  * the derivation lives here as one function rather than inline in each renderer.
  *
@@ -23,7 +23,7 @@
 import type { WorkflowMeta, WorkflowPhaseMeta } from "./meta.js";
 
 /** Raw entry lifecycle, as written by the runtime. */
-export type WorkflowEntryState = "start" | "progress" | "done" | "error";
+type WorkflowEntryState = "start" | "done" | "error";
 
 /** Derived per-agent state, as rendered. */
 export type WorkflowDisplayState =
@@ -32,11 +32,7 @@ export type WorkflowDisplayState =
   | "done"
   | "failed"
   | "skipped"
-  | "blocked"
   | "interrupted";
-
-/** Why an agent is on a later attempt, shown next to its row. */
-export type AttemptReason = "throttled" | "user-retry" | "stalled";
 
 export interface WorkflowPhaseEntry {
   type: "workflow_phase";
@@ -91,17 +87,16 @@ export interface WorkflowAgentEntry {
    * `(asked max)` beside the effective value rather than silently replacing it.
    */
   requestedThinking?: string;
-  fallbackModel?: string;
   isolation?: "worktree";
   error?: string;
   skipped?: boolean;
-  blocked?: boolean;
   cached?: boolean;
   queuedAt?: number;
   startedAt?: number;
   lastProgressAt?: number;
   attempt?: number;
-  lastAttemptReason?: AttemptReason;
+  /** Why the agent is on a later attempt, shown next to its row. */
+  lastAttemptReason?: "user-retry";
   promptPreview?: string;
   resultPreview?: string;
   tokens?: number;
@@ -114,7 +109,7 @@ export type WorkflowEntry = WorkflowPhaseEntry | WorkflowLogEntry | WorkflowAgen
 /** Overall run status, mirroring the task record. */
 export type WorkflowRunStatus = "running" | "completed" | "failed" | "killed" | "paused";
 
-export interface CollapsedProgress {
+interface CollapsedProgress {
   agents: WorkflowAgentEntry[];
   logs: string[];
   phaseTitles: Map<number, string>;
@@ -126,17 +121,12 @@ export interface PhaseGroup {
   agents: WorkflowAgentEntry[];
   doneCount: number;
   totalCount: number;
-  tokens: number;
-  durationMs: number;
 }
 
-export interface WorkflowStats {
+interface WorkflowStats {
   done: number;
-  failedCount: number;
-  running: boolean;
   total: number;
   started: number;
-  complete: boolean;
 }
 
 /**
@@ -171,28 +161,19 @@ export function collapse(progress: readonly WorkflowEntry[]): CollapsedProgress 
  */
 export function displayState(entry: WorkflowAgentEntry, workflowActive: boolean): WorkflowDisplayState {
   if (entry.state === "done") return "done";
-  if (entry.state === "error") {
-    if (entry.skipped) return "skipped";
-    if (entry.blocked) return "blocked";
-    return "failed";
-  }
+  if (entry.state === "error") return entry.skipped ? "skipped" : "failed";
   if (!workflowActive) return "interrupted";
   // Queued means accepted but never given a slot. An entry with no queuedAt at
   // all predates the semaphore and is treated as running.
   return entry.queuedAt != null && entry.startedAt == null ? "queued" : "running";
 }
 
-/** True while an entry is still expected to change. */
-export function isLive(entry: WorkflowAgentEntry): boolean {
-  return entry.state === "start" || entry.state === "progress";
-}
-
-/** Bucket agents by phase. Returns null when no agent declared a phase. */
+/** Bucket agents by phase. Empty when no agent declared a phase. */
 function groupByPhase(
   agents: readonly WorkflowAgentEntry[],
   phaseTitles: Map<number, string>,
-): { phaseIndex: number; title: string; agents: WorkflowAgentEntry[] }[] | null {
-  if (!agents.some(a => a.phaseIndex != null)) return null;
+): { phaseIndex: number; title: string; agents: WorkflowAgentEntry[] }[] {
+  if (!agents.some(a => a.phaseIndex != null)) return [];
 
   const byPhase = new Map<number, { phaseIndex: number; title: string; agents: WorkflowAgentEntry[] }>();
   for (const agent of agents) {
@@ -211,19 +192,10 @@ function groupByPhase(
 function summarize(group: { title: string; agents: WorkflowAgentEntry[] }): PhaseGroup {
   let done = 0;
   let failed = 0;
-  let tokens = 0;
-  let minStart = Number.POSITIVE_INFINITY;
-  let maxProgress = 0;
 
   for (const agent of group.agents) {
     if (agent.state === "done") done++;
     else if (agent.state === "error") failed++;
-    if (agent.tokens) tokens += agent.tokens;
-    if (agent.startedAt != null) {
-      if (agent.startedAt < minStart) minStart = agent.startedAt;
-      const last = agent.lastProgressAt ?? agent.startedAt;
-      if (last > maxProgress) maxProgress = last;
-    }
   }
 
   const total = group.agents.length;
@@ -234,15 +206,7 @@ function summarize(group: { title: string; agents: WorkflowAgentEntry[] }): Phas
     agents: group.agents,
     doneCount: done,
     totalCount: total,
-    tokens,
-    // Wall-clock across the phase, not the sum of its agents: they overlap.
-    durationMs: minStart < Number.POSITIVE_INFINITY ? maxProgress - minStart : 0,
   };
-}
-
-/** A phase declared in `meta` that has not produced any agent yet. */
-function placeholder(title: string): PhaseGroup {
-  return { title, status: "not-started", agents: [], doneCount: 0, totalCount: 0, tokens: 0, durationMs: 0 };
 }
 
 const normalizeTitle = (title: string) => title.toLowerCase().trim();
@@ -275,7 +239,7 @@ function mergePhases(
       consumed.add(match);
       merged.push(summarize(match));
     } else {
-      merged.push(placeholder(phase.title));
+      merged.push({ title: phase.title, status: "not-started", agents: [], doneCount: 0, totalCount: 0 });
     }
   }
 
@@ -297,8 +261,7 @@ export function buildPhaseGroups(
   declared?: readonly WorkflowPhaseMeta[],
 ): PhaseGroup[] {
   const { agents, phaseTitles } = collapse(progress);
-  const observed = groupByPhase(agents, phaseTitles) ?? [];
-  const merged = mergePhases(declared, observed);
+  const merged = mergePhases(declared, groupByPhase(agents, phaseTitles));
   if (merged.length === 0 && agents.length > 0) {
     return [summarize({ title: "Agents", agents })];
   }
@@ -321,39 +284,17 @@ export function buildPhaseGroups(
 export function stats(progress: readonly WorkflowEntry[], agentCount = 0): WorkflowStats {
   let seen = 0;
   let done = 0;
-  let failed = 0;
   let started = 0;
-  let anyLive = false;
 
   for (const entry of progress) {
     if (entry.type !== "workflow_agent") continue;
     seen++;
-    if (entry.state === "done") {
-      done++;
-      started++;
-    } else if (entry.state === "error") {
-      failed++;
-      started++;
-    } else {
-      anyLive = true;
-      // Counted as started unless it is provably still waiting for a slot.
-      if (entry.startedAt !== undefined || entry.queuedAt === undefined) started++;
-    }
+    if (entry.state === "done") done++;
+    // Counted as started unless it is provably still waiting for a slot.
+    if (entry.state !== "start" || entry.startedAt !== undefined || entry.queuedAt === undefined) started++;
   }
 
-  const total = Math.max(agentCount, seen);
-  return {
-    done,
-    failedCount: failed,
-    running: anyLive,
-    total,
-    started,
-    // `!anyLive` is implied by the count test — `total >= seen`, and `seen` also
-    // counts live entries, so `done + failed >= total` can only hold when none
-    // are live. Kept for parity with Claude Code and as a guard should `total`
-    // ever stop deriving from `seen`; no test can reach it as written.
-    complete: !anyLive && seen > 0 && done + failed >= total,
-  };
+  return { done, total: Math.max(agentCount, seen), started };
 }
 
 /** Elapsed run time, excluding any time spent paused. */
@@ -363,8 +304,6 @@ export function elapsedMs(
 ): number {
   return Math.max(0, (task.endTime ?? now) - task.startTime - (task.totalPausedMs ?? 0));
 }
-
-const plural = (n: number, word: string) => (n === 1 ? word : `${word}s`);
 
 /** `1m12s` / `9s` / `340ms`, matching how the rest of the extension reads. */
 export function formatDuration(ms: number): string {
@@ -376,7 +315,7 @@ export function formatDuration(ms: number): string {
   return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
 }
 
-export interface WorkflowHeader {
+interface WorkflowHeader {
   name: string;
   subtext: string;
   stats: string;
@@ -417,7 +356,7 @@ export function header(
   return {
     name: task.workflowName ?? meta?.name ?? "workflow",
     subtext: meta?.description ?? "",
-    stats: `${doneAgents}/${totalAgents} ${plural(totalAgents, "agent")} · ${formatDuration(elapsedMs(task, now))}${suffix}`,
+    stats: `${doneAgents}/${totalAgents} ${totalAgents === 1 ? "agent" : "agents"} · ${formatDuration(elapsedMs(task, now))}${suffix}`,
   };
 }
 
@@ -425,22 +364,13 @@ export function header(
  * Size warning
  * ------------------------------------------------------------------------- */
 
-export const DEFAULT_AGENT_CAP = 25;
-export const DEFAULT_TOKEN_CAP = 1_500_000;
+const AGENT_CAP = 25;
+const TOKEN_CAP = 1_500_000;
 /** Assumed spend per agent before any has reported, for the projection. */
-export const ASSUMED_TOKENS_PER_AGENT = 70_000;
-
-export interface SizeWarning {
-  axis: "agents" | "tokens" | "both";
-  scheduledAgents: number;
-  totalTokens: number;
-  projectedTokens: number;
-  agentCap: number;
-  tokenCap: number;
-}
+const ASSUMED_TOKENS_PER_AGENT = 70_000;
 
 /**
- * Warn when a run is about to get expensive.
+ * Whether a run is about to get expensive.
  *
  * The projection matters more than the current total: a 200-agent fan-out is
  * worth flagging at agent 3, not after it has already spent the budget.
@@ -449,97 +379,8 @@ export function sizeWarning(input: {
   scheduledAgents: number;
   startedAgents: number;
   totalTokens: number;
-  agentCap?: number;
-  tokenCap?: number;
-}): SizeWarning | undefined {
-  const agentCap = input.agentCap ?? DEFAULT_AGENT_CAP;
-  const tokenCap = input.tokenCap ?? DEFAULT_TOKEN_CAP;
+}): boolean {
   const perAgent = input.startedAgents > 0 ? input.totalTokens / input.startedAgents : ASSUMED_TOKENS_PER_AGENT;
   const projectedTokens = Math.max(input.totalTokens, Math.round(perAgent * input.scheduledAgents));
-
-  const overAgents = input.scheduledAgents > agentCap;
-  const overTokens = input.totalTokens > tokenCap || projectedTokens > tokenCap;
-  if (!overAgents && !overTokens) return undefined;
-
-  return {
-    axis: overAgents && overTokens ? "both" : overAgents ? "agents" : "tokens",
-    scheduledAgents: input.scheduledAgents,
-    totalTokens: input.totalTokens,
-    projectedTokens,
-    agentCap,
-    tokenCap,
-  };
-}
-
-/* ------------------------------------------------------------------------- *
- * Footer phase label
- * ------------------------------------------------------------------------- */
-
-/** Words whose gerund is irregular, or which read better left alone. */
-const GERUND_OVERRIDES = new Map<string, string | null>([
-  ["commit", "committing"],
-  ["submit", "submitting"],
-  ["format", "formatting"],
-  ["setup", null],
-  ["cleanup", null],
-]);
-
-const VOWELS = "aeiou";
-const GERUND_CANDIDATE = /^[A-Za-z]{3,12}$/;
-
-/**
- * Render a phase title as an activity: `Scan` → `Scanning`.
- *
- * Only applied in the footer, where the line reads as "what is happening now".
- * Anything that is not a plain short word is left untouched.
- */
-export function gerund(word: string): string {
-  if (!GERUND_CANDIDATE.test(word)) return word;
-  const lower = word.toLowerCase();
-
-  const override = GERUND_OVERRIDES.get(lower);
-  if (override !== undefined) return override === null ? word : word[0] + override.slice(1);
-
-  if (lower.endsWith("ing")) return word;
-  if (lower.endsWith("ie")) return `${word.slice(0, -2)}ying`;
-  if (lower.endsWith("e") && !lower.endsWith("ee") && !lower.endsWith("ye")) return `${word.slice(0, -1)}ing`;
-
-  // Short consonant-vowel-consonant words double the final consonant: run →
-  // running. `w`, `x` and `y` never double.
-  const last = lower.at(-1) ?? "";
-  if (
-    lower.length <= 4 &&
-    !VOWELS.includes(lower.at(-3) ?? "") &&
-    VOWELS.includes(lower.at(-2) ?? "") &&
-    !VOWELS.includes(last) &&
-    !"wxy".includes(last)
-  ) {
-    return `${word}${last}ing`;
-  }
-  return `${word}ing`;
-}
-
-/** Truncation width for a footer phase title. */
-const FOOTER_TITLE_WIDTH = 16;
-
-const truncate = (text: string, width: number) =>
-  text.length <= width ? text : `${text.slice(0, Math.max(1, width - 1))}…`;
-
-/**
- * The footer's "what is this run doing" label.
- *
- * One active phase shows its position; two concurrent phases are joined, since
- * a barrier-free pipeline routinely has work in more than one at a time.
- */
-export function footerPhaseLabel(input: {
-  titles: readonly string[];
-  positionStart: number;
-  totalPhases: number;
-}): string {
-  const titles = input.titles.map(gerund);
-  if (titles.length === 0) return "";
-  if (titles.length === 1) {
-    return `${truncate(titles[0], FOOTER_TITLE_WIDTH)} (${input.positionStart}/${input.totalPhases})`;
-  }
-  return titles.map(t => truncate(t, FOOTER_TITLE_WIDTH)).join(" & ");
+  return input.scheduledAgents > AGENT_CAP || projectedTokens > TOKEN_CAP;
 }

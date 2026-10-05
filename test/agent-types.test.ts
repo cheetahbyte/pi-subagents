@@ -4,13 +4,8 @@ import {
   getAgentConfig,
   getAvailableTypes,
   getConfig,
-  getDefaultAgentNames,
-  getMemoryToolNames,
-  getReadOnlyMemoryToolNames,
   getToolNamesForType,
-  getUserAgentNames,
   isDefaultsDisabled,
-  isValidType,
   NO_FALLBACK,
   registerAgents,
   resolveEnabledTypeIn,
@@ -39,6 +34,12 @@ function makeAgentConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   };
 }
 
+/** Registered and enabled, resolved the way every lookup is: case-insensitively. */
+const isValidType = (type: string) => {
+  const config = getAgentConfig(type);
+  return config !== undefined && config.enabled !== false;
+};
+
 describe("agent type registry", () => {
   beforeEach(() => {
     registerAgents(new Map());
@@ -61,7 +62,7 @@ describe("agent type registry", () => {
       expect(isValidType("")).toBe(false);
     });
 
-    it("case-insensitive lookup works for isValidType", () => {
+    it("case-insensitive lookup works for registered types", () => {
       expect(isValidType("explore")).toBe(true);
       expect(isValidType("EXPLORE")).toBe(true);
       expect(isValidType("General-Purpose")).toBe(true);
@@ -84,16 +85,16 @@ describe("agent type registry", () => {
     it("returns correct config for default types", () => {
       const config = getConfig("general-purpose");
       expect(config.displayName).toBe("Agent");
-      expect(config.builtinToolNames).toEqual(BUILTIN_TOOL_NAMES);
+      expect(getToolNamesForType("general-purpose")).toEqual(BUILTIN_TOOL_NAMES);
       expect(config.extensions).toBe(true);
       expect(config.skills).toBe(true);
     });
 
     it("Explore has read-only tools", () => {
-      const config = getConfig("Explore");
-      expect(config.builtinToolNames).toEqual(["read", "bash", "grep", "find", "ls"]);
-      expect(config.builtinToolNames).not.toContain("edit");
-      expect(config.builtinToolNames).not.toContain("write");
+      const tools = getToolNamesForType("Explore");
+      expect(tools).toEqual(["read", "bash", "grep", "find", "ls"]);
+      expect(tools).not.toContain("edit");
+      expect(tools).not.toContain("write");
     });
 
     it("Explore has haiku model in config", () => {
@@ -116,13 +117,6 @@ describe("agent type registry", () => {
         expect(cfg?.inheritContext, `${name}.inheritContext`).toBeUndefined();
         expect(cfg?.isolated, `${name}.isolated`).toBeUndefined();
       }
-    });
-
-    it("getDefaultAgentNames returns default agent names", () => {
-      const names = getDefaultAgentNames();
-      expect(names).toContain("general-purpose");
-      expect(names).toContain("Explore");
-      expect(names).toContain("Plan");
     });
 
     it("BUILTIN_TOOL_NAMES includes all built-in tools", () => {
@@ -164,7 +158,6 @@ describe("agent type registry", () => {
 
       expect(getAvailableTypes()).toEqual(["auditor"]);
       expect(isValidType("auditor")).toBe(true);
-      expect(getDefaultAgentNames()).toEqual([]);
     });
 
     it("re-enabling restores defaults on next registerAgents", () => {
@@ -185,7 +178,7 @@ describe("agent type registry", () => {
 
       const config = getConfig("general-purpose");
       expect(config.displayName).toBe("Agent");
-      expect(config.builtinToolNames).toEqual(BUILTIN_TOOL_NAMES);
+      expect(getToolNamesForType("general-purpose")).toEqual(BUILTIN_TOOL_NAMES);
       expect(config.promptMode).toBe("append");
     });
   });
@@ -209,18 +202,6 @@ describe("agent type registry", () => {
       expect(types).toContain("auditor");
     });
 
-    it("lists user agent names separately", () => {
-      const agents = new Map([
-        ["auditor", makeAgentConfig({ name: "auditor" })],
-        ["reviewer", makeAgentConfig({ name: "reviewer" })],
-      ]);
-      registerAgents(agents);
-
-      const names = getUserAgentNames();
-      expect(names).toEqual(["auditor", "reviewer"]);
-      expect(names).not.toContain("general-purpose");
-    });
-
     it("getConfig returns config for user agents", () => {
       const agents = new Map([["auditor", makeAgentConfig({
         name: "auditor",
@@ -233,8 +214,6 @@ describe("agent type registry", () => {
 
       const config = getConfig("auditor");
       expect(config.displayName).toBe("auditor");
-      expect(config.description).toBe("Security auditor");
-      expect(config.builtinToolNames).toEqual(["read", "grep"]);
       expect(config.extensions).toBe(false);
       expect(config.skills).toBe(true);
     });
@@ -277,7 +256,7 @@ describe("agent type registry", () => {
     it("getConfig falls back to general-purpose for unknown types", () => {
       const config = getConfig("nonexistent");
       expect(config.displayName).toBe("Agent");
-      expect(config.description).toBe(DEFAULT_AGENTS.get("general-purpose")?.description);
+      expect(config.promptMode).toBe(DEFAULT_AGENTS.get("general-purpose")?.promptMode);
     });
 
     it("clearing user agents works (defaults remain)", () => {
@@ -298,9 +277,8 @@ describe("agent type registry", () => {
       })]]);
       registerAgents(agents);
 
-      const config = getConfig("Explore");
-      expect(config.description).toBe("Custom Explore");
-      expect(config.builtinToolNames).toEqual(BUILTIN_TOOL_NAMES);
+      expect(getAgentConfig("Explore")?.description).toBe("Custom Explore");
+      expect(getToolNamesForType("Explore")).toEqual(BUILTIN_TOOL_NAMES);
     });
 
     it("disabled agent is excluded from available types", () => {
@@ -325,38 +303,6 @@ describe("agent type registry", () => {
       // getConfig fallback should still return something reasonable
       const config = getConfig("general-purpose");
       expect(config.displayName).toBe("Agent");
-    });
-  });
-
-  describe("getMemoryToolNames", () => {
-    it("returns read, write, edit when none exist", () => {
-      const names = getMemoryToolNames(new Set());
-      expect(names).toContain("read");
-      expect(names).toContain("write");
-      expect(names).toContain("edit");
-      expect(names).toHaveLength(3);
-    });
-
-    it("skips tools that already exist", () => {
-      const names = getMemoryToolNames(new Set(["read", "edit"]));
-      expect(names).toEqual(["write"]);
-    });
-
-    it("returns empty when all memory tools already exist", () => {
-      const names = getMemoryToolNames(new Set(["read", "write", "edit"]));
-      expect(names).toHaveLength(0);
-    });
-  });
-
-  describe("getReadOnlyMemoryToolNames", () => {
-    it("returns only read when missing", () => {
-      const names = getReadOnlyMemoryToolNames(new Set());
-      expect(names).toEqual(["read"]);
-    });
-
-    it("returns empty when read already exists", () => {
-      const names = getReadOnlyMemoryToolNames(new Set(["read"]));
-      expect(names).toHaveLength(0);
     });
   });
 

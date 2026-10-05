@@ -27,9 +27,9 @@ import { addUsage, type LifetimeUsage } from "./usage.js";
 import type { CompiledSchema } from "./workflow/json-schema.js";
 import { cleanupWorktree, createWorktree, isWorktreeIsolationEnabled, pruneWorktrees, } from "./worktree.js";
 
-export type OnAgentComplete = (record: AgentRecord) => void;
-export type OnAgentStart = (record: AgentRecord) => void;
-export type OnAgentCompact = (record: AgentRecord, info: CompactionInfo) => void;
+type OnAgentComplete = (record: AgentRecord) => void;
+type OnAgentStart = (record: AgentRecord) => void;
+type OnAgentCompact = (record: AgentRecord, info: CompactionInfo) => void;
 /**
  * Fired once per assistant `message_end`, for EVERY agent this manager owns —
  * top-level and nested alike, spawns and resumes. The one place where each
@@ -39,8 +39,8 @@ export type OnAgentCompact = (record: AgentRecord, info: CompactionInfo) => void
  * a basis for anything that must not count a message twice — parent-session
  * accounting above all.
  */
-export type OnAgentUsage = (record: AgentRecord, usage: LifetimeUsage) => void;
-export type CompactionInfo = { reason: "manual" | "threshold" | "overflow"; tokensBefore: number };
+type OnAgentUsage = (record: AgentRecord, usage: LifetimeUsage) => void;
+type CompactionInfo = { reason: "manual" | "threshold" | "overflow"; tokensBefore: number };
 
 /** A question a nested child has asked a parent, delivered to `onQuestion`. */
 export type AgentQuestion = {
@@ -48,10 +48,9 @@ export type AgentQuestion = {
   childAgentId: string;
   parentAgentId: string | undefined;
   question: string;
-  createdAt: number;
 };
 
-export type OnAgentQuestion = (question: AgentQuestion) => void;
+type OnAgentQuestion = (question: AgentQuestion) => void;
 
 /** Internal bookkeeping layered under an `AgentQuestion`: settlement + delivery. */
 interface PendingAgentQuestion extends AgentQuestion {
@@ -106,6 +105,10 @@ const DEFAULT_MAX_CONCURRENT_FOREGROUND = 0;
  * far above the handful anyone keeps in their head.
  */
 const MAX_TOMBSTONES = 100;
+
+function keptWorktreeNote(path: string): string {
+  return `The agent's changes could not be committed to a branch. Its worktree was kept at \`${path}\`.`;
+}
 
 /**
  * Validate a caller-supplied SpawnOptions.cwd. `undefined`/`null` mean "unset"
@@ -343,17 +346,15 @@ interface ResumeOptions {
    * the record still "running" (or "queued" at the concurrency limit) and
    * notify on completion via onComplete, exactly like a background spawn.
    * Default (false/undefined) runs the resume inline and returns the settled
-   * record — the historical behavior.
+   * record.
    */
   isBackground?: boolean;
   /** Called on tool start/end with activity info (for streaming progress to UI). */
   onToolActivity?: (activity: ToolActivity) => void;
   /** Called once per assistant message_end with that message's usage delta. */
   onAssistantUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
-  /** Called when the session successfully compacts. */
-  onCompaction?: (info: CompactionInfo) => void;
   /**
-   * Background resume only: called synchronously when the run actually starts —
+   * Called synchronously when the run actually starts —
    * immediately, or later from drainQueue. Callers wire per-run side effects
    * (output-file streaming) here rather than at the call site, so a resume that
    * is stopped while still queued never leaves a subscription behind: `abort()`
@@ -607,20 +608,20 @@ export class AgentManager {
       record.status = "queued";
       // A queued record never reaches startAgent's signal wiring, so arm the
       // parent abort here or Esc could not release the position.
-      if (!this.armQueuedAbort(id, options.signal)) return id;
+      if (!this.armQueuedAbort(record, options.signal)) return id;
       let release!: () => void;
       record.startGate = new Promise<void>(resolve => { release = resolve; });
       this.queue.push({
         id,
         pool,
-        start: () => this.launch(id, record, args, pool),
+        start: () => this.launch(record, args, pool),
         release: () => release(),
       });
       options.onQueued?.(id, this.queue.filter(e => e.pool === pool).length - 1);
       return id;
     }
 
-    this.launch(id, record, args, undefined);
+    this.launch(record, args, undefined);
     return id;
   }
 
@@ -639,17 +640,14 @@ export class AgentManager {
    * record is a no-op — so detaching would only be tidiness, and tidiness the
    * `abortAll`/`dispose` paths could not offer anyway.
    */
-  private armQueuedAbort(id: string, signal?: AbortSignal): boolean {
+  private armQueuedAbort(record: AgentRecord, signal?: AbortSignal): boolean {
     if (signal === undefined) return true;
     if (signal.aborted) {
-      const record = this.agents.get(id);
-      if (record) {
-        record.status = "stopped";
-        record.completedAt = Date.now();
-      }
+      record.status = "stopped";
+      record.completedAt = Date.now();
       return false;
     }
-    signal.addEventListener("abort", () => this.abort(id), { once: true });
+    signal.addEventListener("abort", () => this.abort(record.id), { once: true });
     return true;
   }
 
@@ -666,8 +664,9 @@ export class AgentManager {
    *   as the throw out of `spawn()` did: no orphan in `listAgents()`, and the
    *   handle goes back.
    */
-  private launch(id: string, record: AgentRecord, args: SpawnArgs, queuedPool: Pool | undefined): Promise<void> {
-    const startup = this.startAgent(id, record, args).then(
+  private launch(record: AgentRecord, args: SpawnArgs, queuedPool: Pool | undefined): Promise<void> {
+    const id = record.id;
+    const startup = this.startAgent(record, args).then(
       () => { this.startups.delete(id); },
       (err) => {
         this.startups.delete(id);
@@ -711,10 +710,10 @@ export class AgentManager {
 
   /** Actually start an agent (called immediately or from queue drain). */
   private async startAgent(
-    id: string,
     record: AgentRecord,
     { pi, ctx, type, prompt, options }: SpawnArgs,
   ) {
+    const id = record.id;
     // Re-validate a caller-supplied cwd: queued spawns can start minutes after
     // spawn()'s check, and the directory may be gone by then (TOCTOU). Same
     // curated errors; drainQueue parks a throw on the record as an error.
@@ -827,27 +826,14 @@ export class AgentManager {
       // copy came from, so the prompt can tell the agent not to work there.
       worktreeBase: worktreeCwd ? baseCwd : undefined,
       configCwd: options.configCwd ?? (customCwd !== undefined ? ctx.cwd : undefined),
-      signal: record.abortController!.signal,
-      onToolActivity: (activity) => {
-        if (activity.type === "end") record.toolUses++;
-        options.onToolActivity?.(activity);
-      },
+      signal: record.abortController.signal,
+      ...this.runCallbacks(record, options),
       onTurnEnd: options.onTurnEnd,
       onTextDelta: options.onTextDelta,
-      onAssistantUsage: (usage) => {
-        addUsage(record.lifetimeUsage, usage);
-        this.onUsage?.(record, usage);
-        options.onAssistantUsage?.(usage);
-      },
-      onCompaction: (info) => {
-        record.compactionCount++;
-        this.onCompact?.(record, info);
-        options.onCompaction?.(info);
-      },
       nestedRuntime: {
         manager: this,
         parentAgentId: id,
-        depth: record.depth ?? 1,
+        depth: record.depth,
         maxSubagentDepth: record.maxSubagentDepth,
       },
       onSessionCreated: (session) => {
@@ -893,7 +879,7 @@ export class AgentManager {
         options.onSessionCreated?.(session);
       },
     })
-      .then(async ({ responseText, session, aborted, steered, timedOut, failure, structuredJson, structuredRetried }) => {
+      .then(async ({ responseText, session, aborted, steered, timedOut, failure, structuredJson }) => {
         // Don't overwrite status if externally stopped via abort()
         if (record.status !== "stopped") {
           record.timedOut = timedOut;
@@ -914,17 +900,11 @@ export class AgentManager {
         // reader — it is previewed, transcribed, and appended to below — while
         // this is a machine-readable payload one caller asked for by schema.
         record.structuredJson = structuredJson;
-        record.structuredRetried = structuredRetried;
         record.session = session;
         record.completedAt ??= Date.now();
 
         detach();
-
-        // Final flush of streaming output file
-        if (record.outputCleanup) {
-          try { record.outputCleanup(); } catch { /* ignore */ }
-          record.outputCleanup = undefined;
-        }
+        this.flushOutput(record);
 
         // Clean up worktree if used
         if (record.worktree) {
@@ -947,13 +927,10 @@ export class AgentManager {
             // what a human reads, so the note still belongs on it.
             record.result = (record.result ?? "") +
               `\n\n---\nChanges saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git merge ${wtResult.branch}\`${customCwd !== undefined ? ` (run in \`${baseCwd}\`)` : ""}`;
+          } else if (wtResult.path) {
+            record.result = `${record.result ?? ""}\n\n---\n${keptWorktreeNote(wtResult.path)}`;
           }
         }
-
-        this.abortOwnedChildren(id);
-        // A settled child's pending question could never be answered — its
-        // parent is gone or about to be, and the child itself is done waiting.
-        this.cancelQuestionsForAgent(id);
 
         this.settleRun(record, true, pool);
         return responseText;
@@ -967,23 +944,16 @@ export class AgentManager {
         record.completedAt ??= Date.now();
 
         detach();
-
-        // Final flush of streaming output file on error
-        if (record.outputCleanup) {
-          try { record.outputCleanup(); } catch { /* ignore */ }
-          record.outputCleanup = undefined;
-        }
+        this.flushOutput(record);
 
         // Best-effort worktree cleanup on error
         if (record.worktree) {
           try {
             const wtResult = await cleanupWorktree(pi, baseCwd, record.worktree, options.description);
             record.worktreeResult = wtResult;
+            if (wtResult.path) record.error += `\n${keptWorktreeNote(wtResult.path)}`;
           } catch { /* ignore cleanup errors */ }
         }
-
-        this.abortOwnedChildren(id);
-        this.cancelQuestionsForAgent(id);
 
         this.settleRun(record, false, pool);
         return "";
@@ -999,9 +969,39 @@ export class AgentManager {
     options.onSpawned?.(id);
   }
 
+  /** Final flush of the streaming output file. */
+  private flushOutput(record: AgentRecord): void {
+    if (!record.outputCleanup) return;
+    try { record.outputCleanup(); } catch { /* ignore */ }
+    record.outputCleanup = undefined;
+  }
+
+  /** Per-run callbacks shared by spawns and resumes: account on the record, then forward. */
+  private runCallbacks(
+    record: AgentRecord,
+    options: Pick<SpawnOptions, "onToolActivity" | "onAssistantUsage" | "onCompaction">,
+  ) {
+    return {
+      onToolActivity: (activity: ToolActivity) => {
+        if (activity.type === "end") record.toolUses++;
+        options.onToolActivity?.(activity);
+      },
+      onAssistantUsage: (usage: LifetimeUsage) => {
+        addUsage(record.lifetimeUsage, usage);
+        this.onUsage?.(record, usage);
+        options.onAssistantUsage?.(usage);
+      },
+      onCompaction: (info: CompactionInfo) => {
+        record.compactionCount++;
+        this.onCompact?.(record, info);
+        options.onCompaction?.(info);
+      },
+    };
+  }
+
   /**
-   * The shared tail of both settle paths: release whatever pool slot the run
-   * held, notify, and let the queue drain into the freed slot.
+   * The shared tail of both settle paths: stop what the run owned, release
+   * whatever pool slot it held, notify, and let the queue drain into the freed slot.
    *
    * The decrement lives HERE and nowhere else. `abort()` on a running record
    * only fires its controller and leaves the run to settle normally, so
@@ -1018,6 +1018,11 @@ export class AgentManager {
    *   the release disagree with the acquire.
    */
   private settleRun(record: AgentRecord, guardCallback: boolean, pool: Pool | undefined): void {
+    this.abortOwnedChildren(record.id);
+    // A settled child's pending question could never be answered — its
+    // parent is gone or about to be, and the child itself is done waiting.
+    this.cancelQuestionsForAgent(record.id);
+
     if (!record.isBackground) record.resultConsumed = true;
     if (pool === "background") this.runningBackground--;
     else if (pool === "foreground") this.runningForeground--;
@@ -1155,154 +1160,115 @@ export class AgentManager {
 
   /**
    * Resume an existing agent session with a new prompt.
+   *
+   * Runs inline and returns the settled record. With `options.isBackground` it
+   * runs detached instead: returns immediately with the record "running" (or
+   * "queued" at the concurrency limit) and notifies on completion via
+   * onComplete, exactly like a background spawn.
    */
   async resume(
     id: string,
     prompt: string,
     signal?: AbortSignal,
-    options?: ResumeOptions,
+    options: ResumeOptions = {},
   ): Promise<AgentRecord | undefined> {
     const record = this.agents.get(id);
     if (!record?.session) return undefined;
 
-    // Background resume: settle asynchronously and notify on completion exactly
-    // like a background spawn, returning immediately with the record still
-    // "running" — or "queued" when at the concurrency limit. Previously
-    // run_in_background was ignored on resume (the Agent tool's resume branch
-    // returned before its background branch, and resume() only ever awaited
-    // inline), so a resumed agent always blocked the caller until it finished.
-    if (options?.isBackground) {
-      // Never re-enter a run that is still in flight. Detaching means the caller
-      // gets control back while the record stays "running", so nothing stops the
-      // model from resuming the same agent again. Starting a second run would
-      // overwrite record.abortController — orphaning the live run beyond the
-      // reach of `/agents` stop and abortAll() — double-count the pool slot, and
-      // then reject from session.prompt() with "Agent is already processing",
-      // whose settle path would abort the LIVE run's children and report a
-      // failure for a run that is still going. Refuse instead, leaving the
-      // record untouched; the caller decides whether to wait or steer.
-      if (record.status === "running" || record.status === "queued") return undefined;
+    // Never re-enter a run that is still in flight. Starting a second run would
+    // overwrite record.abortController — orphaning the live run beyond the
+    // reach of `/agents` stop and abortAll() — and then reject from
+    // session.prompt() with "Agent is already processing", whose settle path
+    // would abort the LIVE run's children and report a failure for a run that
+    // is still going. Refuse instead, leaving the record untouched; the caller
+    // decides whether to wait or steer.
+    if (record.status === "running" || record.status === "queued") return undefined;
 
-      record.isBackground = true;
-      record.resultConsumed = false;
-      record.result = undefined;
-      // A resumed run never gets a StructuredOutput tool; a stale payload would
-      // answer this run with the last one's JSON.
-      record.structuredJson = undefined;
-      record.structuredRetried = undefined;
-      record.error = undefined;
-      record.completedAt = undefined;
-      record.status = "queued";
+    record.result = undefined;
+    // A resumed run never gets a StructuredOutput tool; a stale payload would
+    // answer this run with the last one's JSON.
+    record.structuredJson = undefined;
+    record.error = undefined;
+    record.completedAt = undefined;
 
-      const start = () => this.startResume(id, record, prompt, signal, options);
-      if (occupiesPoolSlot(record) && !this.poolHasRoom("background")) {
-        // At the concurrency limit — queue it, drains when a slot frees. A
-        // detached resume has no inline caller, hence nothing to release. The
-        // queue is shared with spawns, whose startup is async, so entries are
-        // promise-shaped even though a resume starts synchronously; failures
-        // land on the record here, since drainQueue no longer catches.
-        this.queue.push({
-          id,
-          pool: "background",
-          start: async () => {
-            try {
-              start();
-            } catch (err) {
-              record.status = "error";
-              record.error = err instanceof Error ? err.message : String(err);
-              record.completedAt = Date.now();
-              this.onComplete?.(record);
-            }
-          },
-          release: () => {},
-        });
-      } else {
-        start();
-      }
+    if (!options.isBackground) {
+      this.startResume(record, prompt, signal, options);
+      await record.promise;
       return record;
     }
 
-    // Foreground resume: run inline and return the settled record.
-    record.status = "running";
-    record.startedAt = Date.now();
-    record.completedAt = undefined;
-    record.result = undefined;
-    record.structuredJson = undefined;
-    record.structuredRetried = undefined;
-    record.error = undefined;
+    record.isBackground = true;
+    record.resultConsumed = false;
+    record.status = "queued";
 
-    try {
-      const { text, failure } = await resumeAgent(record.session, prompt, {
-        onToolActivity: (activity) => {
-          if (activity.type === "end") record.toolUses++;
-          options?.onToolActivity?.(activity);
+    const start = () => this.startResume(record, prompt, signal, options);
+    if (occupiesPoolSlot(record) && !this.poolHasRoom("background")) {
+      // At the concurrency limit — queue it, drains when a slot frees. A
+      // detached resume has no inline caller, hence nothing to release. The
+      // queue is shared with spawns, whose startup is async, so entries are
+      // promise-shaped even though a resume starts synchronously; failures
+      // land on the record here, since drainQueue no longer catches.
+      this.queue.push({
+        id,
+        pool: "background",
+        start: async () => {
+          try {
+            start();
+          } catch (err) {
+            record.status = "error";
+            record.error = err instanceof Error ? err.message : String(err);
+            record.completedAt = Date.now();
+            this.onComplete?.(record);
+          }
         },
-        onAssistantUsage: (usage) => {
-          addUsage(record.lifetimeUsage, usage);
-          this.onUsage?.(record, usage);
-          options?.onAssistantUsage?.(usage);
-        },
-        onCompaction: (info) => {
-          record.compactionCount++;
-          this.onCompact?.(record, info);
-          options?.onCompaction?.(info);
-        },
-        signal,
+        release: () => {},
       });
-      // Same contract as the spawn path (#144): a failed final turn is an
-      // error, not a completion — but the resumed text stays available.
-      record.status = failure ? "error" : "completed";
-      if (failure) record.error = failure;
-      record.result = text;
-      record.completedAt = Date.now();
-    } catch (err) {
-      record.status = "error";
-      record.error = err instanceof Error ? err.message : String(err);
-      record.completedAt = Date.now();
+    } else {
+      start();
     }
-
-    // Same contract as the spawn settle paths: children spawned during the
-    // resumed turn must not outlive it — nothing else can see or reach them.
-    this.abortOwnedChildren(id);
-    this.cancelQuestionsForAgent(id);
-
     return record;
   }
 
   /**
-   * Start a background resume run: detached, settling and notifying like
-   * startAgent's background path. Invoked immediately, or from drainQueue when
-   * a concurrency slot frees. The session already exists (resume reuses it), so
-   * there is no onSessionCreated to hang per-run wiring off — callers use
-   * `options.onStarted`, which fires on both the immediate and the drained path.
+   * Start a resume run. Invoked immediately, or — for a detached resume — from
+   * drainQueue when a concurrency slot frees. The session already exists
+   * (resume reuses it), so there is no onSessionCreated to hang per-run wiring
+   * off — callers use `options.onStarted`, which fires on both the immediate
+   * and the drained path.
    */
   private startResume(
-    id: string,
     record: AgentRecord,
     prompt: string,
-    parentSignal: AbortSignal | undefined,
+    signal: AbortSignal | undefined,
     options: ResumeOptions,
   ) {
     if (!record.session) return;
+    const id = record.id;
+    // Only a detached resume takes a pool slot and reports through the
+    // lifecycle callbacks; an inline one hands its result straight to its caller.
+    const detached = options.isBackground === true;
+    const pooled = detached && occupiesPoolSlot(record);
 
     record.status = "running";
     record.startedAt = Date.now();
-    if (occupiesPoolSlot(record)) this.runningBackground++;
-    this.onStart?.(record);
+    if (pooled) this.runningBackground++;
+    if (detached) this.onStart?.(record);
 
     // Fresh abort controller so /agents stop and steering target THIS run rather
     // than the previous one's settled controller.
     const abortController = new AbortController();
     record.abortController = abortController;
-    // Optional, and NOT what the Agent tool passes for a detached resume: a
-    // parent signal aborts on the parent's own interrupt (user Esc), which is
-    // right for a foreground run whose result the caller is awaiting, and wrong
-    // for a detached one — background spawns omit it for exactly this reason.
-    let detachParentSignal: (() => void) | undefined;
-    if (parentSignal) {
-      const onParentAbort = () => this.abort(id);
-      parentSignal.addEventListener("abort", onParentAbort, { once: true });
-      detachParentSignal = () => parentSignal.removeEventListener("abort", onParentAbort);
+    // The Agent tool omits the signal for a detached resume: it aborts on the
+    // parent's own interrupt (user Esc), which is right for an inline run whose
+    // result the caller is awaiting, and wrong for a detached one.
+    let detachSignal: (() => void) | undefined;
+    if (signal) {
+      const onAbort = () => this.abort(id);
+      if (signal.aborted) onAbort();
+      else {
+        signal.addEventListener("abort", onAbort, { once: true });
+        detachSignal = () => signal.removeEventListener("abort", onAbort);
+      }
     }
 
     // Per-run side effects (output streaming) — see ResumeOptions.onStarted.
@@ -1310,36 +1276,19 @@ export class AgentManager {
     try { options.onStarted?.(); } catch { /* ignore caller wiring errors */ }
 
     const settle = () => {
-      detachParentSignal?.();
-      detachParentSignal = undefined;
-      // Final flush of streaming output file
-      if (record.outputCleanup) {
-        try { record.outputCleanup(); } catch { /* ignore */ }
-        record.outputCleanup = undefined;
-      }
+      detachSignal?.();
+      this.flushOutput(record);
       // Children spawned during the resumed turn must not outlive it.
       this.abortOwnedChildren(id);
       this.cancelQuestionsForAgent(id);
-      if (occupiesPoolSlot(record)) this.runningBackground--;
+      if (pooled) this.runningBackground--;
+      if (!detached) return;
       try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
       this.drainQueue();
     };
 
-    const promise = resumeAgent(record.session, prompt, {
-      onToolActivity: (activity) => {
-        if (activity.type === "end") record.toolUses++;
-        options.onToolActivity?.(activity);
-      },
-      onAssistantUsage: (usage) => {
-        addUsage(record.lifetimeUsage, usage);
-        this.onUsage?.(record, usage);
-        options.onAssistantUsage?.(usage);
-      },
-      onCompaction: (info) => {
-        record.compactionCount++;
-        this.onCompact?.(record, info);
-        options.onCompaction?.(info);
-      },
+    record.promise = resumeAgent(record.session, prompt, {
+      ...this.runCallbacks(record, options),
       signal: abortController.signal,
     })
       .then(({ text, failure }) => {
@@ -1364,8 +1313,6 @@ export class AgentManager {
         settle();
         return "";
       });
-
-    record.promise = promise;
   }
 
   /**
@@ -1490,7 +1437,7 @@ export class AgentManager {
     record.status = "stopped";
     record.completedAt = Date.now();
     this.cancelQuestionsForAgent(id);
-    record.abortController?.abort();
+    record.abortController.abort();
     return true;
   }
 
@@ -1532,7 +1479,6 @@ export class AgentManager {
         childAgentId,
         parentAgentId: child.parentAgentId,
         question,
-        createdAt: Date.now(),
         settled: false,
         resolve,
         reject,
@@ -1559,7 +1505,6 @@ export class AgentManager {
             childAgentId,
             parentAgentId: record.parentAgentId,
             question,
-            createdAt: record.createdAt,
           });
         } else {
           // Nested child: steer the exact parent, never the root callback.
@@ -1671,7 +1616,8 @@ export class AgentManager {
   }
 
   /** Dispose a record's session and remove it from the map. */
-  private removeRecord(id: string, record: AgentRecord): void {
+  private removeRecord(record: AgentRecord): void {
+    const id = record.id;
     this.tombstone(record);
     // A removed agent can no longer answer (it is gone), and a removed child's
     // unanswered question is moot — sweep both directions, idempotently.
@@ -1717,10 +1663,10 @@ export class AgentManager {
 
   private cleanup() {
     const cutoff = Date.now() - 10 * 60_000;
-    for (const [id, record] of this.agents) {
+    for (const record of this.agents.values()) {
       if (record.status === "running" || record.status === "queued") continue;
       if ((record.completedAt ?? 0) >= cutoff) continue;
-      this.removeRecord(id, record);
+      this.removeRecord(record);
     }
   }
 
@@ -1731,10 +1677,10 @@ export class AgentManager {
    * (resultConsumed=false) — they will be evicted by the 10-minute cleanup timer instead.
    */
   clearCompleted(skipUnconsumed = false): void {
-    for (const [id, record] of this.agents) {
+    for (const record of this.agents.values()) {
       if (record.status === "running" || record.status === "queued") continue;
       if (skipUnconsumed && !record.resultConsumed) continue;
-      this.removeRecord(id, record);
+      this.removeRecord(record);
     }
     // Unconditional: both callers are session boundaries (`session_start` and
     // `session_before_switch`), and `skipUnconsumed` only spares records whose
@@ -1773,7 +1719,7 @@ export class AgentManager {
         record.status = "stopped";
         record.completedAt = Date.now();
         this.cancelQuestionsForAgent(record.id);
-        record.abortController?.abort();
+        record.abortController.abort();
         count++;
       }
     }

@@ -95,7 +95,7 @@ export function resolveModel(
     }
   }
 
-  if (bestMatch && bestScore >= 20) {
+  if (bestMatch) {
     const found = registry.find(bestMatch.provider, bestMatch.id);
     if (found) return found;
   }

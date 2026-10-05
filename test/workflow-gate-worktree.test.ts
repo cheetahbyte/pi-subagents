@@ -120,7 +120,6 @@ function childWrites(fallback: string) {
 
 const spawnRequest = (overrides: Partial<WorkflowSpawnRequest> = {}): WorkflowSpawnRequest => ({
   agentId: "wf-agent-0",
-  index: 0,
   prompt: "fix the failing test",
   label: "impl",
   agentType: "general-purpose",
@@ -173,6 +172,17 @@ describe("gate on an isolated child", () => {
 
     // …and the copy is still torn down afterwards: verifying it must not keep it.
     expect(existsSync(worktreePath!)).toBe(false);
+  });
+
+  it("stops a child that was skipped while its worktree was still being created", async () => {
+    const { pi } = makePi();
+    const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
+
+    // The manager has not issued an id yet: it is awaiting `git worktree add`.
+    const pending = host.spawnAgent(spawnRequest({ isolation: "worktree" }));
+    host.abortAgent("wf-agent-0");
+
+    expect(await pending).toMatchObject({ ok: false, skipped: true });
   });
 
   it("fails the agent with the gate's output, and still cleans the worktree up", async () => {

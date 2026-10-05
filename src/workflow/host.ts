@@ -48,7 +48,7 @@ import { resolveWorkflowSource } from "./saved.js";
  * suite — but not unbounded: `pi.exec` reports a timeout as `killed`, and a
  * gate that hangs forever would wedge the agent slot it is holding.
  */
-export const DEFAULT_GATE_TIMEOUT_MS = 10 * 60_000;
+const GATE_TIMEOUT_MS = 10 * 60_000;
 
 export interface WorkflowHostOptions {
   pi: ExtensionAPI;
@@ -67,7 +67,6 @@ export interface WorkflowHostOptions {
    * reports for them, and it has its own concurrency cap.
    */
   workflowId?: string;
-  gateTimeoutMs?: number;
 }
 
 /**
@@ -97,7 +96,6 @@ function succeeded(record: AgentRecord | undefined): boolean {
   return record?.status === "completed" || record?.status === "steered";
 }
 
-/** Translate a settled record into what the script sees. */
 /**
  * The effective-configuration half of a record, in the runtime's pi-free shape.
  *
@@ -116,6 +114,7 @@ function resolvedInfo(record: AgentRecord | undefined) {
   };
 }
 
+/** Translate a settled record into what the script sees. */
 function toSpawnResult(record: AgentRecord): WorkflowSpawnResult {
   const tokens = getLifetimeTotal(record.lifetimeUsage);
   // Reported separately from `tokens`, which is the lifetime total. The script's
@@ -140,7 +139,6 @@ function toSpawnResult(record: AgentRecord): WorkflowSpawnResult {
       // parse. A child asked for a schema that produced none never reaches
       // here — `runAgent` reports that through `failure`.
       text: record.structuredJson ?? record.result ?? "",
-      ...(record.structuredRetried ? { structuredRetried: true } : {}),
     };
   }
   // "stopped" is someone reaching in and stopping this child — /agents or a
@@ -161,6 +159,12 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
   /** Runtime agent id → the manager record it spawned. Never pruned mid-run. */
   const records = new Map<string, string>();
   /**
+   * Aborts that arrived before the manager issued an id, applied in `onSpawned`.
+   * A worktree child's id only exists after `git worktree add`, and a skip or
+   * retry landing in that window would otherwise be dropped.
+   */
+  const pendingAborts = new Set<string>();
+  /**
    * scopeModels warnings already toasted, so a fan-out that pins one
    * out-of-scope agent file raises one notification rather than one per child.
    * Kept for the whole run: the same message is the same warning at agent 200
@@ -176,7 +180,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
   async function executeGate(command: string, cwd: string): Promise<WorkflowGateResult> {
     const result = await pi.exec(GATE_SHELL[0], [GATE_SHELL[1], command], {
       cwd,
-      timeout: deps.gateTimeoutMs ?? DEFAULT_GATE_TIMEOUT_MS,
+      timeout: GATE_TIMEOUT_MS,
       ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
     });
     const output = [result.stdout, result.stderr]
@@ -289,6 +293,9 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
               }
             };
 
+      // A retry reuses the agent id: forget the stopped attempt's record, so an
+      // abort during this attempt's startup is held rather than sent to it.
+      records.delete(request.agentId);
       try {
         const { record } = await manager.spawnAndWait(
           pi,
@@ -339,6 +346,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
             // would otherwise never be openable at all.
             request.onResolved?.({ recordId: id });
             reportResolved();
+            if (pendingAborts.delete(request.agentId)) manager.abort(id);
           },
         );
         return { ...toSpawnResult(record), ...(gate !== undefined ? { gate } : {}) };
@@ -347,14 +355,17 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
         // never ran. That is this agent's failure, not the run's: the script
         // sees `null` and its siblings carry on.
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      } finally {
+        // A retry reuses the agent id, so an abort that never found its child
+        // must not stop the next attempt.
+        pendingAborts.delete(request.agentId);
       }
     },
 
     abortAgent(agentId) {
       const id = records.get(agentId);
-      // Nothing to abort before the manager has issued an id — the child is
-      // still in startup, and the run's own signal reaches it there.
       if (id !== undefined) manager.abort(id);
+      else pendingAborts.add(agentId);
     },
 
     async resumeAgent(agentId, prompt, onResolved) {
@@ -366,7 +377,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
       if (record === undefined) {
         return {
           ok: false,
-          error: `Agent ${id} has no session left to resume — records are dropped ten minutes after they finish.`,
+          error: `Agent ${id} cannot be resumed — it is still running, or its record was dropped (ten minutes after it finished).`,
         };
       }
       // The resumed row is built from scratch, so it has to be told the same

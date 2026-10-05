@@ -40,14 +40,8 @@ export const STRUCTURED_OUTPUT_TOOL_NAME = "StructuredOutput";
 export interface StructuredCapture {
   /** The last payload that validated, canonicalised. Absent until one does. */
   json?: string;
-  /** Why the most recent attempt was rejected, for the retry prompt. */
+  /** Why the most recent attempt was rejected, for the retry prompt. Absent when the tool was never called. */
   lastError?: string;
-  /** Whether the tool was called at all — "never tried" reads differently. */
-  called: boolean;
-}
-
-export function createStructuredCapture(): StructuredCapture {
-  return { called: false };
 }
 
 /**
@@ -91,7 +85,6 @@ export function createStructuredOutputTool(
       }
     },
     execute: async (_toolCallId, params) => {
-      capture.called = true;
       const verdict = compiled.check(params);
       if (verdict !== true) {
         capture.lastError = verdict;
@@ -123,7 +116,7 @@ export function createStructuredOutputTool(
  * never answered at all sends it looking for a mistake it did not make.
  */
 export function structuredRetryPrompt(capture: StructuredCapture): string {
-  const reason = capture.called && capture.lastError !== undefined
+  const reason = capture.lastError !== undefined
     ? `Your last ${STRUCTURED_OUTPUT_TOOL_NAME} call did not match the required schema: ${capture.lastError}`
     : `You did not call ${STRUCTURED_OUTPUT_TOOL_NAME}, so your answer was not recorded.`;
   return `${reason}\n\nCall ${STRUCTURED_OUTPUT_TOOL_NAME} now with your complete final answer. Do not reply with prose.`;

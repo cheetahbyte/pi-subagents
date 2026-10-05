@@ -236,10 +236,10 @@ export function resolveResumeTarget(
           : "Nothing has run yet — call this without `resumeFromRunId`."),
     };
   }
-  if (prior.status === "running") {
+  if (prior.status === "running" || prior.status === "paused") {
     return {
       ok: false,
-      message: `Workflow "${id}" is still running. Stop it from /agents → Workflows before resuming it.`,
+      message: `Workflow "${id}" has not finished. Stop it from /agents → Workflows before resuming it.`,
     };
   }
   if (prior.journalPath === undefined) {

@@ -7,7 +7,7 @@ import { basename, join } from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { BUILTIN_TOOL_NAMES } from "./agent-types.js";
 import { isProjectTrusted } from "./project-trust.js";
-import type { AgentConfig, IsolationMode, MemoryScope, ThinkingLevel } from "./types.js";
+import type { AgentConfig, IsolationMode, ThinkingLevel } from "./types.js";
 
 /**
  * The one thing a declared `name:` may not contain, matching Claude Code
@@ -118,13 +118,14 @@ function loadFromDir(dir: string, agents: Map<string, AgentConfig>, source: "pro
       description: str(fm.description) ?? name,
       builtinToolNames,
       extSelectors,
-      disallowedTools: csvListOptional(fm.disallowed_tools),
+      disallowedTools: parseCsvField(fm.disallowed_tools),
       extensions: inheritField(fm.extensions ?? fm.inherit_extensions),
-      excludeExtensions: csvListOptional(fm.exclude_extensions),
+      excludeExtensions: parseCsvField(fm.exclude_extensions),
       skills: inheritField(fm.skills ?? fm.inherit_skills),
       model: str(fm.model),
       thinking: str(fm.thinking) as ThinkingLevel | undefined,
-      maxTurns: nonNegativeInt(fm.max_turns),
+      // 0 means unlimited.
+      maxTurns: typeof fm.max_turns === "number" && fm.max_turns >= 0 ? fm.max_turns : undefined,
       timeoutMs: parseTimeout(fm.timeout, path),
       persistSession: fm.persist_session != null ? fm.persist_session === true : undefined,
       outputTranscript: fm.output_transcript != null ? fm.output_transcript !== false : undefined,
@@ -135,7 +136,7 @@ function loadFromDir(dir: string, agents: Map<string, AgentConfig>, source: "pro
       inheritContext: fm.inherit_context != null ? fm.inherit_context === true : undefined,
       runInBackground: fm.run_in_background != null ? fm.run_in_background === true : undefined,
       isolated: fm.isolated != null ? fm.isolated === true : undefined,
-      memory: parseMemory(fm.memory),
+      memory: fm.memory === "user" || fm.memory === "project" || fm.memory === "local" ? fm.memory : undefined,
       isolation: parseIsolation(fm.isolation),
       enabled: fm.enabled !== false,  // default true; explicitly false disables
       source,
@@ -144,18 +145,6 @@ function loadFromDir(dir: string, agents: Map<string, AgentConfig>, source: "pro
   }
 }
 
-/**
- * Read and parse one agent file, or warn and return undefined for the caller to
- * skip. One bad file must not take the whole extension down with it — an
- * unparseable `.md` used to abort activation, so pi exited before the TUI.
- *
- * The path is as much of the fix as the recovery: a bare YAML error ("line 2,
- * column 14") is unactionable when agents come from three directories at once,
- * and the only other symptom is `Unknown agent type`, which reads like a typo.
- *
- * Under `strict` the same failure rethrows, still naming the path, so callers
- * that opted into failing closed stop rather than run a substituted agent.
- */
 /**
  * Parse an agent file's frontmatter, tolerating a leading UTF-8 BOM.
  *
@@ -175,6 +164,18 @@ export function parseAgentFrontmatter<T extends Record<string, unknown>>(content
   return parseFrontmatter<T>(content.startsWith("\uFEFF") ? content.slice(1) : content);
 }
 
+/**
+ * Read and parse one agent file, or warn and return undefined for the caller to
+ * skip. One bad file must not take the whole extension down with it — an
+ * unparseable `.md` used to abort activation, so pi exited before the TUI.
+ *
+ * The path is as much of the fix as the recovery: a bare YAML error ("line 2,
+ * column 14") is unactionable when agents come from three directories at once,
+ * and the only other symptom is `Unknown agent type`, which reads like a typo.
+ *
+ * Under `strict` the same failure rethrows, still naming the path, so callers
+ * that opted into failing closed stop rather than run a substituted agent.
+ */
 function readAgentFile(path: string, strict: boolean): { frontmatter: Record<string, unknown>; body: string } | undefined {
   try {
     return parseAgentFrontmatter<Record<string, unknown>>(readFileSync(path, "utf-8"));
@@ -222,11 +223,6 @@ function str(val: unknown): string | undefined {
   return typeof val === "string" ? val : undefined;
 }
 
-/** Extract a non-negative integer or undefined. 0 means unlimited for max_turns. */
-function nonNegativeInt(val: unknown): number | undefined {
-  return typeof val === "number" && val >= 0 ? val : undefined;
-}
-
 /**
  * Parse `timeout:` — a duration like "90s", "10m" or "1h", the `schedule`
  * interval syntax (matched here: importing the scheduler would be a cycle).
@@ -270,15 +266,6 @@ function parseAllowedSubagents(val: unknown): "all" | string[] | undefined {
 }
 
 /**
- * Parse a comma-separated list field with defaults.
- * omitted → defaults; "none"/empty → []; csv → listed items.
- */
-function csvList(val: unknown, defaults: string[]): string[] {
-  if (val === undefined || val === null) return defaults;
-  return parseCsvField(val) ?? [];
-}
-
-/**
  * Partition the `tools:` CSV into the built-in tool allowlist and raw `ext:` selectors.
  * `*` (and the case-insensitive alias `all`, for `tools: all`) expands to all
  * built-ins; plain entries are built-in names; `ext:` entries are extension-tool
@@ -286,7 +273,7 @@ function csvList(val: unknown, defaults: string[]): string[] {
  * `tools:` present with only `ext:` entries → zero built-ins (use `*`).
  */
 function parseToolsField(val: unknown): { builtinToolNames: string[]; extSelectors: string[] | undefined } {
-  const entries = csvList(val, BUILTIN_TOOL_NAMES);
+  const entries = val === undefined || val === null ? BUILTIN_TOOL_NAMES : parseCsvField(val) ?? [];
   const isWildcard = (e: string) => e === "*" || e.toLowerCase() === "all";
   const hasWildcard = entries.some(isWildcard);
   const plain = entries.filter(e => !isWildcard(e) && !e.startsWith("ext:"));
@@ -295,23 +282,6 @@ function parseToolsField(val: unknown): { builtinToolNames: string[]; extSelecto
     builtinToolNames: hasWildcard ? [...new Set([...BUILTIN_TOOL_NAMES, ...plain])] : plain,
     extSelectors: extEntries.length > 0 ? extEntries : undefined,
   };
-}
-
-/**
- * Parse an optional comma-separated list field.
- * omitted → undefined; "none"/empty → undefined; csv → listed items.
- */
-function csvListOptional(val: unknown): string[] | undefined {
-  return parseCsvField(val);
-}
-
-/**
- * Parse a memory scope field.
- * omitted → undefined; "user"/"project"/"local" → MemoryScope.
- */
-function parseMemory(val: unknown): MemoryScope | undefined {
-  if (val === "user" || val === "project" || val === "local") return val;
-  return undefined;
 }
 
 /**
@@ -339,6 +309,5 @@ function parseIsolation(val: unknown): IsolationMode | undefined {
 function inheritField(val: unknown): true | string[] | false {
   if (val === undefined || val === null || val === true) return true;
   if (val === false || val === "none") return false;
-  const items = csvList(val, []);
-  return items.length > 0 ? items : false;
+  return parseCsvField(val) ?? false;
 }

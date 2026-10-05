@@ -8,10 +8,9 @@
 
 import type { AgentRecord } from "./types.js";
 
-export type DeliveryCallback = (records: AgentRecord[], partial: boolean) => void;
+type DeliveryCallback = (records: AgentRecord[], partial: boolean) => void;
 
 interface AgentGroup {
-  groupId: string;
   agentIds: Set<string>;
   completedRecords: Map<string, AgentRecord>;
   timeoutHandle?: ReturnType<typeof setTimeout>;
@@ -37,7 +36,6 @@ export class GroupJoinManager {
   /** Register a group of agent IDs that should be joined. */
   registerGroup(groupId: string, agentIds: string[]): void {
     const group: AgentGroup = {
-      groupId,
       agentIds: new Set(agentIds),
       completedRecords: new Map(),
       delivered: false,
@@ -67,7 +65,11 @@ export class GroupJoinManager {
 
     // All done — deliver immediately
     if (group.completedRecords.size >= group.agentIds.size) {
-      this.deliver(group, false);
+      if (group.timeoutHandle) clearTimeout(group.timeoutHandle);
+      group.delivered = true;
+      this.deliverCb([...group.completedRecords.values()], false);
+      for (const id of group.agentIds) this.agentToGroup.delete(id);
+      this.groups.delete(groupId);
       return 'delivered';
     }
 
@@ -105,30 +107,6 @@ export class GroupJoinManager {
     group.agentIds = remaining;
     group.isStraggler = true;
     // Timeout will be started when the next straggler completes
-  }
-
-  private deliver(group: AgentGroup, partial: boolean): void {
-    if (group.timeoutHandle) {
-      clearTimeout(group.timeoutHandle);
-      group.timeoutHandle = undefined;
-    }
-    group.delivered = true;
-    this.deliverCb([...group.completedRecords.values()], partial);
-    this.cleanupGroup(group.groupId);
-  }
-
-  private cleanupGroup(groupId: string): void {
-    const group = this.groups.get(groupId);
-    if (!group) return;
-    for (const id of group.agentIds) {
-      this.agentToGroup.delete(id);
-    }
-    this.groups.delete(groupId);
-  }
-
-  /** Check if an agent is in a group. */
-  isGrouped(agentId: string): boolean {
-    return this.agentToGroup.has(agentId);
   }
 
   dispose(): void {

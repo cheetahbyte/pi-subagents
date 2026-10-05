@@ -45,13 +45,13 @@ const WHITE = { r: 255, g: 255, b: 255 };
 type Rgb = { r: number; g: number; b: number };
 type ColorMode = "truecolor" | "256color";
 
-export interface AgentNameTheme {
+interface AgentNameTheme {
   fg(color: string, text: string): string;
   bold(text: string): string;
   getColorMode?(): ColorMode;
 }
 
-export interface AgentNameStyle {
+interface AgentNameStyle {
   /** Existing theme foreground used when no valid agent color is configured. */
   fallbackColor?: string;
   /** Reapply an enclosing background after the badge instead of resetting it. */

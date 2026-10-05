@@ -16,9 +16,9 @@
  * Two things about this file are easy to get wrong.
  *
  * **The glyphs are not the dialog's glyphs.** The inline row keys off the *raw*
- * entry `state` (start | progress | done | error), not the derived display
- * state, so a skipped or blocked agent renders as a plain ✘ here while the
- * workflows dialog distinguishes them. `displayState` is deliberately not
+ * entry `state` (start | done | error), not the derived display state, so a
+ * skipped agent renders as a plain ✘ here while the workflows dialog
+ * distinguishes it. `displayState` is deliberately not
  * consulted below.
  *
  * **The layout is pure.** `layoutWorkflowCard` returns coloured segments and
@@ -31,7 +31,7 @@
  * arranges what that module returns.
  */
 
-import { stripTerminalSequences, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, stripTerminalSequences, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { WorkflowEntryData } from "../workflow/entry.js";
 import type { WorkflowMeta } from "../workflow/meta.js";
 import {
@@ -57,7 +57,7 @@ const DEFAULT_WIDTH = 80;
  * Glyphs
  * ------------------------------------------------------------------------- */
 
-export interface WorkflowGlyphs {
+interface WorkflowGlyphs {
   /** Tool-title pointer, matching the Agent tool's `▸`. */
   pointer: string;
   tick: string;
@@ -94,34 +94,13 @@ export const UNICODE_GLYPHS: WorkflowGlyphs = {
   warning: "⚠",
 };
 
-/**
- * The `figures` ASCII tier, for terminals that cannot draw the box set. Every
- * glyph keeps its unicode counterpart's column width so the tree stays aligned
- * either way.
- */
-export const ASCII_GLYPHS: WorkflowGlyphs = {
-  pointer: ">",
-  tick: "√",
-  cross: "×",
-  running: "*",
-  groupTop: ",-",
-  groupMid: "|-",
-  groupBottom: "`-",
-  vertical: "|",
-  branch: "|-",
-  lastBranch: "`-",
-  log: "\\",
-  warning: "!",
-};
-
 /* ------------------------------------------------------------------------- *
  * Lines
  * ------------------------------------------------------------------------- */
 
 /**
  * pi theme keys. Claude Code's palette maps as success→success, error→error,
- * subtle→dim, permission→warning for a blocked row and accent for selection;
- * an undefined colour means "leave it at the terminal default", which is what
+ * subtle→dim and accent for selection; an undefined colour means "leave it at the terminal default", which is what
  * the recovered inline mapping asks for on a running row.
  *
  * `accent` is unused by the card and exists for the workflows dialog, which
@@ -154,12 +133,8 @@ export interface WorkflowCardInput {
   agentCount?: number;
   /** Total tokens for the size warning; summed from the entries when omitted. */
   totalTokens?: number;
-  agentCap?: number;
-  tokenCap?: number;
   now?: number;
   width?: number;
-  /** Swap in the ASCII glyph tier for terminals without unicode. */
-  ascii?: boolean;
   /**
    * Lead with `▸ SubagentWorkflow`.
    *
@@ -181,28 +156,13 @@ export function formatCompactTokens(count: number): string {
   return `${count}`;
 }
 
-/**
- * One label for the model pair. A fallback that never differed from the primary
- * would just be noise, so it only shows when the run actually has two models in
- * play.
- */
-export function formatModel(
-  entry: WorkflowAgentEntry,
-  opts?: { canonical?: boolean },
-): string | undefined {
-  const { fallbackModel } = entry;
-  // `canonical` is for surfaces with the width for `provider/model-id`; the
-  // tight rows take the short label. Chosen here rather than by the caller
-  // swapping fields, which would leave `fallbackModel` in the other spelling.
-  const model = opts?.canonical ? entry.modelId ?? entry.model : entry.model;
-  return model && fallbackModel && model !== fallbackModel ? `${model}→${fallbackModel}` : model ?? fallbackModel;
-}
+/** `N tool call(s)`, as every row and the detail pane spell it. */
+export const formatToolCalls = (count: number) => `${count} tool call${count === 1 ? "" : "s"}`;
 
 /**
  * The thinking level, and what was asked for when it was not honoured.
  *
- * Separate from {@link formatModel} because a row can have one without the
- * other: an `agent()` that named no model still runs at some level, and a level
+ * Separate from the model because a row can have one without the other: an `agent()` that named no model still runs at some level, and a level
  * pi clamped is worth saying so about even when the model is unremarkable.
  */
 export function formatThinking({ thinking, requestedThinking }: { thinking?: string; requestedThinking?: string }): string | undefined {
@@ -228,17 +188,16 @@ export const REPLAYED_ANNOTATION = "from resume journal";
 export function agentStatSegments(entry: WorkflowAgentEntry): string[] {
   const parts: string[] = [];
   if (entry.agentType) parts.push(entry.agentType);
-  const model = formatModel(entry);
-  if (model) parts.push(model);
+  if (entry.model) parts.push(entry.model);
   if (entry.tokens) parts.push(formatCompactTokens(entry.tokens));
-  if (entry.toolCalls) parts.push(`${entry.toolCalls} tool call${entry.toolCalls === 1 ? "" : "s"}`);
+  if (entry.toolCalls) parts.push(formatToolCalls(entry.toolCalls));
   if (entry.durationMs) parts.push(formatDuration(entry.durationMs));
   return parts;
 }
 
 /**
- * The recovered inline mapping — keyed on the raw entry state. `skipped` and
- * `blocked` are not distinguished here; that is the dialog's job.
+ * The recovered inline mapping — keyed on the raw entry state. `skipped` is
+ * not distinguished here; that is the dialog's job.
  */
 function rowGlyph(entry: WorkflowAgentEntry, glyphs: WorkflowGlyphs): WorkflowCardSegment {
   if (entry.state === "done") return { text: glyphs.tick, color: "success" };
@@ -274,6 +233,14 @@ export function clampLine(line: WorkflowCardLine, width: number): WorkflowCardLi
 
 export const lineWidth = (line: WorkflowCardLine) => line.reduce((sum, s) => sum + visibleWidth(s.text), 0);
 
+/** Place `right` flush to `width`, cutting `left` first so the stats survive. */
+export function rightAlign(left: WorkflowCardLine, right: WorkflowCardLine, width: number): WorkflowCardLine {
+  const rightWidth = lineWidth(right);
+  const clampedLeft = clampLine(left, Math.max(0, width - rightWidth - 1));
+  const gap = Math.max(1, width - lineWidth(clampedLeft) - rightWidth);
+  return clampLine([...clampedLeft, { text: " ".repeat(gap) }, ...right], width);
+}
+
 /**
  * Build the card.
  *
@@ -281,7 +248,7 @@ export const lineWidth = (line: WorkflowCardLine) => line.reduce((sum, s) => sum
  * warning — comes from `progress.ts`; what happens here is purely arrangement.
  */
 export function layoutWorkflowCard(input: WorkflowCardInput): WorkflowCardLine[] {
-  const glyphs = input.ascii ? ASCII_GLYPHS : UNICODE_GLYPHS;
+  const glyphs = UNICODE_GLYPHS;
   const width = Math.max(1, input.width ?? DEFAULT_WIDTH);
   const now = input.now ?? Date.now();
 
@@ -304,10 +271,7 @@ export function layoutWorkflowCard(input: WorkflowCardInput): WorkflowCardLine[]
         { text: head.name, color: "muted" },
       ]
     : [{ text: "  " }, { text: head.name, color: "toolTitle", bold: true }];
-  const statsWidth = visibleWidth(head.stats);
-  const clampedLeft = clampLine(left, Math.max(0, width - statsWidth - 1));
-  const gap = Math.max(1, width - lineWidth(clampedLeft) - statsWidth);
-  lines.push([...clampedLeft, { text: " ".repeat(gap) }, { text: head.stats, color: "dim" }]);
+  lines.push(rightAlign(left, [{ text: head.stats, color: "dim" }], width));
 
   if (head.subtext) lines.push(clampLine([{ text: `  ${head.subtext}`, color: "dim" }], width));
 
@@ -385,8 +349,6 @@ export function layoutWorkflowCard(input: WorkflowCardInput): WorkflowCardLine[]
     scheduledAgents: Math.max(input.agentCount ?? 0, totals.total),
     startedAgents: totals.started,
     totalTokens,
-    agentCap: input.agentCap,
-    tokenCap: input.tokenCap,
   });
   if (warning) {
     lines.push(
@@ -401,11 +363,6 @@ export function layoutWorkflowCard(input: WorkflowCardInput): WorkflowCardLine[]
  * Rendering
  * ------------------------------------------------------------------------- */
 
-/** The card as plain text — what the layout tests assert against. */
-export function plainWorkflowCardLines(lines: readonly WorkflowCardLine[]): string[] {
-  return lines.map(line => line.map(segment => segment.text).join(""));
-}
-
 /** Apply the theme. Nothing here changes the layout, only its colours. */
 export function styleWorkflowCardLines(lines: readonly WorkflowCardLine[], theme: Theme): string[] {
   return lines.map(line =>
@@ -419,8 +376,15 @@ export function styleWorkflowCardLines(lines: readonly WorkflowCardLine[], theme
 }
 
 /** The card as a component, for a tool result or a session entry renderer. */
-export function renderWorkflowCard(input: WorkflowCardInput, theme: Theme): Text {
-  return new Text(styleWorkflowCardLines(layoutWorkflowCard(input), theme).join("\n"), 0, 0);
+export function renderWorkflowCard(input: WorkflowCardInput, theme: Theme): Component {
+  return {
+    // Laid out per render: the width is only known once pi asks for the lines.
+    render: width => {
+      const lines = layoutWorkflowCard({ ...input, width: input.width ?? width });
+      return new Text(styleWorkflowCardLines(lines, theme).join("\n"), 0, 0).render(width);
+    },
+    invalidate() {},
+  };
 }
 
 /**
@@ -431,7 +395,7 @@ export function renderWorkflowCard(input: WorkflowCardInput, theme: Theme): Text
  * says what it is. Returns undefined for an entry with no data, which is what
  * pi's renderer contract wants for "nothing to draw".
  */
-export function renderWorkflowEntryCard(data: WorkflowEntryData | undefined, theme: Theme): Text | undefined {
+export function renderWorkflowEntryCard(data: WorkflowEntryData | undefined, theme: Theme): Component | undefined {
   if (!data) return undefined;
   return renderWorkflowCard(
     {

@@ -8,9 +8,9 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  createStructuredCapture,
   createStructuredOutputTool,
   STRUCTURED_OUTPUT_TOOL_NAME,
+  type StructuredCapture,
   structuredRetryPrompt,
 } from "../src/structured-output.js";
 import { compileJsonSchema } from "../src/workflow/json-schema.js";
@@ -24,7 +24,7 @@ const SCHEMA = {
 function build() {
   const compilation = compileJsonSchema(SCHEMA);
   if (!compilation.ok) throw new Error(compilation.message);
-  const capture = createStructuredCapture();
+  const capture: StructuredCapture = {};
   return { tool: createStructuredOutputTool(compilation.compiled, capture), capture };
 }
 
@@ -56,7 +56,6 @@ describe("the StructuredOutput tool", () => {
     const result = await call(tool, { file: "a.ts", line: 3 });
 
     expect(result.isError).toBeFalsy();
-    expect(capture.called).toBe(true);
     expect(JSON.parse(capture.json as string)).toEqual({ file: "a.ts", line: 3 });
     expect(capture.lastError).toBeUndefined();
   });
@@ -70,7 +69,6 @@ describe("the StructuredOutput tool", () => {
     // The reason has to reach the model, or the retry is a guess.
     expect(result.content[0].text).toContain("file");
     expect(capture.json).toBeUndefined();
-    expect(capture.called).toBe(true);
     expect(capture.lastError).toBeDefined();
   });
 
@@ -109,10 +107,10 @@ describe("the StructuredOutput tool", () => {
 
 describe("the retry prompt", () => {
   it("distinguishes never answering from answering wrongly", () => {
-    const silent = createStructuredCapture();
+    const silent = {};
     expect(structuredRetryPrompt(silent)).toMatch(/did not call/i);
 
-    const wrong = { called: true, lastError: "$: must have required properties file" };
+    const wrong = { lastError: "$: must have required properties file" };
     const prompt = structuredRetryPrompt(wrong);
     expect(prompt).toMatch(/did not match the required schema/);
     // Telling a model it got the shape wrong when it never answered would send
@@ -122,7 +120,7 @@ describe("the retry prompt", () => {
   });
 
   it("always ends by asking for the call", () => {
-    for (const capture of [createStructuredCapture(), { called: true, lastError: "x" }]) {
+    for (const capture of [{}, { lastError: "x" }]) {
       expect(structuredRetryPrompt(capture)).toMatch(/Call StructuredOutput now/);
     }
   });

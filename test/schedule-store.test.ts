@@ -5,7 +5,7 @@
  * load/save, parse-error self-heal, stale-lock recovery.
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -85,12 +85,10 @@ describe("ScheduleStore", () => {
     expect(store.remove(job.id)).toBe(false);
   });
 
-  it("hasName excludes a given id (for rename safety)", () => {
+  it("hasName reports whether a job with that name exists", () => {
     const store = new ScheduleStore(join(tmp, "s.json"));
-    const job = makeJob({ name: "alpha" });
-    store.add(job);
+    store.add(makeJob({ name: "alpha" }));
     expect(store.hasName("alpha")).toBe(true);
-    expect(store.hasName("alpha", job.id)).toBe(false);  // excluded — own record
     expect(store.hasName("beta")).toBe(false);
   });
 
@@ -130,6 +128,18 @@ describe("ScheduleStore", () => {
     expect(existsSync(lockFile)).toBe(false);
   });
 
+  it("recovers from an old lock file that holds no pid", () => {
+    const file = join(tmp, "s.json");
+    const lockFile = file + ".lock";
+    writeFileSync(lockFile, "");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lockFile, old, old);
+
+    const store = new ScheduleStore(file);
+    expect(() => store.add(makeJob())).not.toThrow();
+    expect(existsSync(lockFile)).toBe(false);
+  });
+
   it("releases the lock after a successful mutation so subsequent ones don't deadlock", () => {
     const store = new ScheduleStore(join(tmp, "s.json"));
     const a = makeJob({ id: "a" });
@@ -162,18 +172,5 @@ describe("ScheduleStore", () => {
     expect(store.update("nonexistent", { name: "x" })).toBeUndefined();
     expect(store.remove("nonexistent")).toBe(false);
     expect(existsSync(dir)).toBe(false);
-  });
-
-  it("deleteFileIfEmpty unlinks file only when no jobs remain", () => {
-    const file = join(tmp, "s.json");
-    const store = new ScheduleStore(file);
-    const job = makeJob();
-    store.add(job);
-    store.deleteFileIfEmpty();  // not empty — should be a no-op
-    expect(existsSync(file)).toBe(true);
-
-    store.remove(job.id);
-    store.deleteFileIfEmpty();
-    expect(existsSync(file)).toBe(false);
   });
 });

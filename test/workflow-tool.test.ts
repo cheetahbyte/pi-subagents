@@ -75,7 +75,6 @@ function stubManager(
 
 const request = (overrides: Partial<WorkflowSpawnRequest> = {}): WorkflowSpawnRequest => ({
   agentId: "wf-agent-0",
-  index: 0,
   prompt: "do the thing",
   label: "step",
   agentType: "general-purpose",
@@ -338,10 +337,8 @@ describe("createWorkflowHost — scopeModels", () => {
     });
 
   beforeEach(() => {
-    // `resolveEnabledModels` memoizes on the patterns plus the mtime/size of
-    // both settings files, so one case's allowlist would otherwise be served to
-    // the next — a fresh project dir per test is what invalidates it. Same
-    // harness as test/cross-extension-rpc.test.ts.
+    // A fresh project dir per test keeps one case's `enabledModels` out of the
+    // next. Same harness as test/cross-extension-rpc.test.ts.
     projectDir = mkdtempSync(join(tmpdir(), "wf-scope-project-"));
     agentDir = mkdtempSync(join(tmpdir(), "wf-scope-global-"));
     prevAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -874,7 +871,7 @@ describe("SubagentWorkflow tool — script vs scriptPath vs name", () => {
       undefined, undefined, workflowCtx(),
     );
 
-    expect(textOf(result)).toMatch(/is still running/);
+    expect(textOf(result)).toMatch(/has not finished/);
   });
 
   it("accepts a settled run and says plainly that there was nothing to replay", async () => {
@@ -895,7 +892,7 @@ describe("SubagentWorkflow tool — script vs scriptPath vs name", () => {
         { script: inlineScript, resumeFromRunId: runId },
         undefined, undefined, workflowCtx(),
       );
-      if (!/is still running/.test(textOf(result))) break;
+      if (!/has not finished/.test(textOf(result))) break;
       await new Promise(resolve => setTimeout(resolve, 20));
     }
 
@@ -957,11 +954,10 @@ describe("SubagentWorkflow tool — script vs scriptPath vs name", () => {
 
     // …and the inline card follows the background run rather than freezing at
     // whatever `execute` returned.
-    const card = String(
-      tools.get("SubagentWorkflow")
-        .renderResult(result, { expanded: false, isPartial: false }, plainTheme, { isError: false })
-        .text ?? "",
-    );
+    const card = tools.get("SubagentWorkflow")
+      .renderResult(result, { expanded: false, isPartial: false }, plainTheme, { isError: false })
+      .render(80)
+      .join("\n");
     expect(card).toContain("from-inline");
     expect(card).toContain("scanned 3 files");
     expect(card).toContain("done");
@@ -1161,7 +1157,7 @@ describe("--subagents-workflow-file", () => {
       theme,
     );
 
-    const text = String(rendered.text ?? "");
+    const text = rendered.render(80).join("\n");
     expect(text).toContain("from-file");
     expect(text).toContain("step");
     expect(text).toContain("1/1 agent");

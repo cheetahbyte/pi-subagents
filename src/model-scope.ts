@@ -21,7 +21,7 @@ let scopeModelsEnabled = false;
 export function isScopeModelsEnabled(): boolean { return scopeModelsEnabled; }
 export function setScopeModelsEnabled(enabled: boolean): void { scopeModelsEnabled = enabled; }
 
-export type ModelScopeVerdict =
+type ModelScopeVerdict =
   /** In scope, or nothing to validate against (feature off / no allowlist). */
   | { kind: "ok" }
   /** Caller-supplied out-of-scope choice — refuse the spawn with this message. */
@@ -52,7 +52,7 @@ export function checkModelScope(args: {
   const { model, cwd, modelRegistry, callerSupplied, agentLabel, modelInput } = args;
   if (!scopeModelsEnabled || !model) return { kind: "ok" };
 
-  const allowed = resolveEnabledModels(readEnabledModels(cwd), modelRegistry, cwd);
+  const allowed = resolveEnabledModels(readEnabledModels(cwd), modelRegistry);
   if (!allowed || isModelInScope(model, allowed)) return { kind: "ok" };
 
   if (callerSupplied) {

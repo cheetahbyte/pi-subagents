@@ -287,4 +287,51 @@ describe("Agent tool — background resume wiring", () => {
 
     await lifecycle.get("session_shutdown")?.({}, ctx);
   });
+
+  it("refuses a foreground resume while the agent's run is still in flight", async () => {
+    const { pi, tools, lifecycle } = makePi();
+    subagentsExtension(pi);
+    const ctx = makeCtx(cwd);
+    vi.mocked(runAgent).mockImplementation(async (_ctx, _type, _prompt, options: any) => {
+      await Promise.resolve();
+      options.onSessionCreated?.(session);
+      return new Promise(() => {}); // never settles — the run is still in flight
+    });
+    const id = await spawnSettled(tools, ctx);
+
+    const res = await tools.get("Agent").execute(
+      "resume-call",
+      { prompt: "keep going", description: "Keep going", subagent_type: "general-purpose", resume: id, run_in_background: false },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    expect(resultText(res)).toContain("is still running");
+    expect(resumeAgent).not.toHaveBeenCalled();
+
+    await lifecycle.get("session_shutdown")?.({}, ctx);
+  });
+
+  it("streams a foreground resume into the transcript it cites", async () => {
+    const { pi, tools, lifecycle } = makePi();
+    subagentsExtension(pi);
+    const ctx = makeCtx(cwd);
+    const id = await spawnSettled(tools, ctx);
+    vi.mocked(streamToOutputFile).mockClear();
+
+    await tools.get("Agent").execute(
+      "resume-call",
+      { prompt: "keep going", description: "Keep going", subagent_type: "general-purpose", resume: id, run_in_background: false },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    // Anchored past the three messages already on disk, and released afterwards.
+    expect(streamToOutputFile).toHaveBeenCalledWith(session, "/tmp/fake-subagent.output", id, cwd, 3);
+    expect(vi.mocked(streamToOutputFile).mock.results[0].value).toHaveBeenCalled();
+
+    await lifecycle.get("session_shutdown")?.({}, ctx);
+  });
 });

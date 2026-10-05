@@ -20,9 +20,9 @@ function describeToolCalls(content: unknown[]): string[] {
   const out: string[] = [];
   for (const c of content as any[]) {
     if (c?.type !== "toolCall") continue;
-    const name = c.name ?? c.toolName ?? "unknown";
+    const name = c.name;
     let args = "";
-    try { args = JSON.stringify(c.arguments ?? c.input ?? {}); } catch { args = ""; }
+    try { args = JSON.stringify(c.arguments); } catch { args = ""; }
     if (args.length > TOOL_ARGS_MAX) args = args.slice(0, TOOL_ARGS_MAX) + "…";
     out.push(`  ${name} ${args}`.trimEnd());
   }

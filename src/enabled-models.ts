@@ -26,25 +26,14 @@
  *   → resolves to { "anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-6" }
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { ModelEntry } from "./model-resolver.js";
+import type { ModelEntry, ModelRegistry } from "./model-resolver.js";
 import { isProjectTrusted } from "./project-trust.js";
 
 /** Minimal registry shape — only the methods resolveEnabledModels actually calls. */
-export interface ModelRegistryRef {
-  getAll(): unknown[];
-  getAvailable?(): unknown[];
-}
-
-/** Paths to pi's settings.json files: [project, global] (project takes precedence). */
-function settingsPaths(cwd: string): [project: string, global: string] {
-  return [
-    join(cwd, ".pi", "settings.json"),
-    join(getAgentDir(), "settings.json"),
-  ];
-}
+export type ModelRegistryRef = Pick<ModelRegistry, "getAll" | "getAvailable">;
 
 /** Read `enabledModels` from a single settings.json file. Undefined when missing or absent. */
 function readField(path: string): string[] | undefined {
@@ -65,8 +54,8 @@ function readField(path: string): string[] | undefined {
  * Returns undefined when neither file has the field.
  */
 export function readEnabledModels(cwd: string): string[] | undefined {
-  const [project, global] = settingsPaths(cwd);
-  return (isProjectTrusted() ? readField(project) : undefined) ?? readField(global);
+  return (isProjectTrusted() ? readField(join(cwd, ".pi", "settings.json")) : undefined)
+    ?? readField(join(getAgentDir(), "settings.json"));
 }
 
 /**
@@ -76,50 +65,14 @@ export function readEnabledModels(cwd: string): string[] | undefined {
  * Patterns without a slash, with glob characters, or with a `:thinking`
  * suffix are silently dropped. See module-level docstring for rationale.
  *
- * Cache: keyed on JSON.stringify(patterns) + mtime/size of *both*
- * project and global settings.json files. Re-resolves when either file
- * changes or the patterns argument differs.
- *
  * Returns undefined when no patterns are provided or no patterns match
  * (scope check becomes a no-op at the call site).
  */
-
-// Module-level cache — invalidated when either settings.json changes or patterns differ.
-let cachedAllowed: Set<string> | undefined;
-let cachedHash = "";
-let cachedPatternsKey = "";
-
-/** mtime+size hash of one file, or "missing" if absent. */
-function hashOf(path: string): string {
-  try {
-    const s = statSync(path);
-    return `${s.mtimeMs}-${s.size}`;
-  } catch {
-    return "missing";
-  }
-}
-
 export function resolveEnabledModels(
   patterns: string[] | undefined,
   registry: ModelRegistryRef,
-  cwd: string = process.cwd(),
 ): Set<string> | undefined {
-  // Fast path: check cache (stat both project and global settings.json files)
-  const patternsKey = JSON.stringify(patterns);
-  const [project, global] = settingsPaths(cwd);
-  const fileHash = `${hashOf(project)};${hashOf(global)}`;
-
-  if (fileHash === cachedHash && patternsKey === cachedPatternsKey) {
-    return cachedAllowed;
-  }
-
-  // Cache miss — resolve
-  if (!patterns || patterns.length === 0) {
-    cachedHash = fileHash;
-    cachedPatternsKey = patternsKey;
-    cachedAllowed = undefined;
-    return undefined;
-  }
+  if (!patterns || patterns.length === 0) return undefined;
 
   const available = (registry.getAvailable?.() ?? registry.getAll()) as ModelEntry[];
   const allowed = new Set<string>();
@@ -130,13 +83,8 @@ export function resolveEnabledModels(
     resolveExact(trimmed, available, allowed);
   }
 
-  const result = allowed.size > 0 ? allowed : undefined;
-  cachedHash = fileHash;
-  cachedPatternsKey = patternsKey;
-  cachedAllowed = result;
-  return result;
+  return allowed.size > 0 ? allowed : undefined;
 }
-
 
 
 /**

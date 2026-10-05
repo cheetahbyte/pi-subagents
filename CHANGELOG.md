@@ -15,6 +15,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Subagent results returned to the caller are capped at 50KB or 2000 lines.** A foreground `Agent` result, a resume, `get_subagent_result` and nested results passed the agent's full prose into the parent's context, whatever its size. A longer result is now cut and ends with a note naming the `.output` transcript that holds the rest. Structured (`schema`) payloads and `verbose` conversation logs are not cut.
 
+### Fixed
+
+- **An isolated agent's work is no longer deleted when it cannot be committed.** If any git step failed during worktree cleanup (`status`, `add`, `commit`, `branch`), the worktree was removed and the run reported no changes. The worktree is now kept and the result names its path.
+- **Stopping an agent during startup now stops it.** An abort that arrived while the child session was still being built (Esc right after spawning, `/agents` stop, a queued spawn whose caller had already aborted) was lost, and the agent ran to completion while marked "stopped".
+- **A foreground resume can be stopped, and cannot be started on an agent that is still running or queued.** `resume` without `run_in_background` ignored a stop and overwrote "stopped" with "completed"; resuming an agent mid-run marked the live run failed and aborted its children. It is now refused with the same "still running" message the background path gives.
+- **A foreground resume is written to the agent's transcript.** The result could cite a transcript file that did not contain the resumed turn.
+- **`resumeFromRunId` no longer accepts a paused workflow.** A paused run is still appending to its journal, so resuming from it started a second run over a moving journal. It is refused like a running one, with the message `Workflow "<id>" has not finished.`
+- **Skipping or retrying a workflow agent while its worktree is being created takes effect.** The stop was dropped because the child had no id yet, so a skipped agent ran to completion and a retried one ran twice.
+- **Skipping a workflow agent while its `gate` command runs takes effect.** The child had already finished, so there was nothing to stop and the gate's verdict stood. The call now returns `null` as a skipped agent.
+- **`budget.spent()` counts the attempt a retry stopped.** A user retry dropped the stopped attempt's output tokens from the workflow's total.
+- **The inline workflow card follows the terminal width.** It was always laid out at 80 columns, so stats stopped short on a wide terminal and lines wrapped on a narrow one.
+- **The `SubagentWorkflow` call line no longer retains every streamed script prefix.** Its name cache was keyed by full script source and never pruned, while pi renders the call on each streaming update. It now remembers only the latest source.
+- **Turning Scheduling back on in `/agents → Settings` restarts the scheduler immediately.** It stayed inactive until the next session, and `schedule` calls were refused.
+- **"Next run" for interval schedules no longer drifts by the length of the previous run.** `/agents → Scheduled jobs` computed it from when the last run finished, while the timer fires on a fixed cadence.
+- **A scheduled job no longer shows "running" forever after a session ended mid-run.** The status was only cleared by the run finishing in the same process. It is reset to "error" when the scheduler starts.
+- **An empty schedule lock file is reclaimed.** A lock left without a pid was never treated as stale, so every schedule change blocked for five seconds and then failed. One older than five seconds is now removed; a failed store write inside a timer is reported as a schedule error instead of throwing.
+- **The `scopeModels` allowlist follows the model registry.** It was cached on the settings files alone, so a model that became available mid-session stayed out of scope until `settings.json` changed.
+- **Completion notifications show the turn count again.** The activity tracker was deleted before the held notification read it.
+- **Session shutdown clears the pending batch and group-join timers.** They could fire up to 30 seconds after shutdown.
+- **`get_subagent_result` called with a handle cancels the held completion notification**, as it already did when called with the id.
+- **`get_subagent_result` on a queued agent says it is queued** instead of reporting "No output."
+- **A rejected wrap-up steer no longer surfaces as an unhandled rejection** when an agent hits its turn or time limit.
+
+### Removed
+
+- **Dead code across the extension.** Test-only helpers, fields that were written and never read (`AgentRecord.groupId` and `.joinMode`, the persisted `nextRun` of a scheduled job), workflow progress states nothing emitted (`blocked`, `throttled`, `stalled`, `fallbackModel`, the ASCII glyph sets) and shims for pi versions below the 0.87.0 floor are gone. No documented behavior changes; schedule files that still carry `nextRun` load as before. Code importing from `src/` directly loses those symbols, and `registerRpcHandlers` now returns one dispose function.
+
 ### Security
 
 - **Project-local subagent files are ignored in projects pi does not trust.** `.pi/agents/`, `.agents/agents/`, `.pi/subagents.json`, saved workflows, project skills used for preloading, `.pi/agent-tool-description.md` and the project `enabledModels` were read regardless of pi's trust decision. They are now skipped when `ctx.isProjectTrusted()` is false; global files still apply. A project with none of pi's own trust-requiring resources counts as trusted, so one that ships only `.pi/agents/` loads as before. See [Project trust](README.md#project-trust).

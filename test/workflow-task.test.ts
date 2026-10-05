@@ -16,6 +16,7 @@ import {
   createWorkflowTask,
   failWorkflowTask,
   pauseWorkflowTask,
+  resolveResumeTarget,
   resumeWorkflowTask,
   type WorkflowTask,
 } from "../src/workflow/task.js";
@@ -24,7 +25,6 @@ function stubControl(): WorkflowControl & { pause: ReturnType<typeof vi.fn> } {
   return {
     pause: vi.fn(),
     resume: vi.fn(),
-    isPaused: vi.fn(() => false),
     skip: vi.fn(() => true),
     retry: vi.fn(() => true),
   } as unknown as WorkflowControl & { pause: ReturnType<typeof vi.fn> };
@@ -89,6 +89,18 @@ describe("pausing a run", () => {
     expect(resumeWorkflowTask(task, 3_000)).toBe(true);
     expect(resumeWorkflowTask(task, 4_000)).toBe(false);
     expect(control.resume).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("resuming from an earlier run", () => {
+  it("refuses a run that is only paused", () => {
+    // Paused is still live: it keeps appending to the journal a resume would read.
+    const { task } = runningTask();
+    task.journalPath = "/tmp/wf_abc123.workflow.jsonl";
+    pauseWorkflowTask(task, 5_000);
+
+    const target = resolveResumeTarget(task.id, new Map([[task.id, task]]));
+    expect(target).toMatchObject({ ok: false, message: expect.stringContaining("has not finished") });
   });
 });
 

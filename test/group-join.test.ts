@@ -32,7 +32,6 @@ describe("GroupJoinManager", () => {
     const mgr = new GroupJoinManager(deliver);
     expect(mgr.onAgentComplete(makeRecord("a"))).toBe("pass");
     expect(deliver).not.toHaveBeenCalled();
-    expect(mgr.isGrouped("a")).toBe(false);
   });
 
   it("holds the first completion and arms the join timeout", () => {
@@ -40,7 +39,6 @@ describe("GroupJoinManager", () => {
     const mgr = new GroupJoinManager(deliver, 30_000);
     mgr.registerGroup("g", ["a", "b"]);
 
-    expect(mgr.isGrouped("a")).toBe(true);
     expect(mgr.onAgentComplete(makeRecord("a"))).toBe("held");
 
     vi.advanceTimersByTime(29_999);
@@ -59,10 +57,6 @@ describe("GroupJoinManager", () => {
     const [records, partial] = deliver.mock.calls[0];
     expect(records.map((r: AgentRecord) => r.id).sort()).toEqual(["a", "b"]);
     expect(partial).toBe(false);
-
-    // Group is cleaned up — no future deliveries can fire from these ids
-    expect(mgr.isGrouped("a")).toBe(false);
-    expect(mgr.isGrouped("b")).toBe(false);
   });
 
   it("delivers partial=true on timeout and re-arms the group for stragglers", () => {
@@ -77,11 +71,6 @@ describe("GroupJoinManager", () => {
     const [records, partial] = deliver.mock.calls[0];
     expect(records.map((r: AgentRecord) => r.id)).toEqual(["a"]);
     expect(partial).toBe(true);
-
-    // 'a' was delivered and is dropped from the group; 'b' and 'c' remain as stragglers
-    expect(mgr.isGrouped("a")).toBe(false);
-    expect(mgr.isGrouped("b")).toBe(true);
-    expect(mgr.isGrouped("c")).toBe(true);
   });
 
   it("uses the shorter straggler timeout (15s) regardless of the configured group timeout", () => {
@@ -103,7 +92,6 @@ describe("GroupJoinManager", () => {
 
     expect(deliver.mock.calls[1][0].map((r: AgentRecord) => r.id)).toEqual(["b"]);
     expect(deliver.mock.calls[1][1]).toBe(true);
-    expect(mgr.isGrouped("c")).toBe(true); // 'c' is the remaining straggler now
   });
 
   it("delivers stragglers as a complete batch (partial=false) when all complete before their timeout", () => {
@@ -147,7 +135,5 @@ describe("GroupJoinManager", () => {
 
     vi.advanceTimersByTime(60_000);
     expect(deliver).not.toHaveBeenCalled();
-    expect(mgr.isGrouped("a")).toBe(false);
-    expect(mgr.isGrouped("b")).toBe(false);
   });
 });

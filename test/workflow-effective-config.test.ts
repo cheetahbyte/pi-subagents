@@ -38,7 +38,6 @@ const pi = {} as any;
 
 const spawnRequest = (overrides: Partial<WorkflowSpawnRequest> = {}): WorkflowSpawnRequest => ({
   agentId: "wf-agent-0",
-  index: 0,
   prompt: "do the thing",
   label: "impl",
   agentType: "general-purpose",

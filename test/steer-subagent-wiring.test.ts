@@ -17,18 +17,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.js", async () => {
   const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
-  return { ...actual, runAgent: vi.fn(), steerAgent: vi.fn() };
+  return { ...actual, runAgent: vi.fn() };
 });
 
-import { runAgent, steerAgent } from "../src/agent-runner.js";
+import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
 import { ctx, flush, makePi, textOf } from "./helpers/boot-extension.js";
 
-// steerAgent and runAgent are module-level mocks shared by every case here, so
-// call history has to be reset or a "was never called" assertion depends on the
-// order the cases happen to run in.
+// runAgent is a module-level mock shared by every case here, so its history
+// has to be reset or one case's implementation leaks into the next.
 beforeEach(() => {
-  vi.mocked(steerAgent).mockReset();
   vi.mocked(runAgent).mockReset();
 });
 
@@ -112,25 +110,11 @@ describe("steer_subagent before the session exists", () => {
 
     await lifecycle.get("session_shutdown")?.();
   });
-
-  it("does not call steerAgent — there is no session to steer yet", async () => {
-    const { pi, tools, lifecycle } = makePi();
-    subagentsExtension(pi);
-    heldRun();
-
-    const id = await spawnBackground(tools);
-    await flush();
-    await steer(tools, id, "hello");
-
-    expect(steerAgent).not.toHaveBeenCalled();
-
-    await lifecycle.get("session_shutdown")?.();
-  });
 });
 
 describe("steer_subagent once the session exists", () => {
   it("reports failure and emits no event when the steer throws", async () => {
-    // The event is emitted only AFTER steerAgent resolves, so a failed steer
+    // The event is emitted only AFTER the steer resolves, so a failed steer
     // must not announce itself as delivered.
     const { pi, tools, lifecycle } = makePi();
     subagentsExtension(pi);
@@ -138,10 +122,9 @@ describe("steer_subagent once the session exists", () => {
 
     const id = await spawnBackground(tools);
     await flush();
-    run.create(fakeSession());
+    run.create(fakeSession({ steer: vi.fn().mockRejectedValue(new Error("session closed")) }));
     await flush();
 
-    vi.mocked(steerAgent).mockRejectedValueOnce(new Error("session closed"));
     const result = await steer(tools, id, "too late");
 
     expect(textOf(result)).toContain("Failed to steer agent");
@@ -154,20 +137,20 @@ describe("steer_subagent once the session exists", () => {
     await lifecycle.get("session_shutdown")?.();
   });
 
-  it("delivers through steerAgent and announces the steer on success", async () => {
+  it("delivers through the session and announces the steer on success", async () => {
     const { pi, tools, lifecycle } = makePi();
     subagentsExtension(pi);
     const run = heldRun();
 
     const id = await spawnBackground(tools);
     await flush();
-    run.create(fakeSession());
+    const sessionSteer = vi.fn().mockResolvedValue(undefined);
+    run.create(fakeSession({ steer: sessionSteer }));
     await flush();
 
-    vi.mocked(steerAgent).mockResolvedValueOnce(undefined as any);
     const result = await steer(tools, id, "refocus");
 
-    expect(steerAgent).toHaveBeenCalledWith(expect.anything(), "refocus");
+    expect(sessionSteer).toHaveBeenCalledWith("refocus");
     expect(textOf(result)).toContain("Steering message sent");
     expect(pi.events.emit).toHaveBeenCalledWith("subagents:steered", { id, message: "refocus" });
 

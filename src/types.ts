@@ -84,7 +84,7 @@ export interface AgentConfig {
   /** false = agent is hidden from the registry */
   enabled?: boolean;
   /** Where this agent was loaded from */
-  source?: "default" | "project" | "global";
+  source?: "project" | "global";
   /** Path of the .md it was loaded from. Unset for embedded defaults. */
   sourcePath?: string;
 }
@@ -179,7 +179,7 @@ export interface AgentRecord {
   startedAt: number;
   completedAt?: number;
   session?: AgentSession;
-  abortController?: AbortController;
+  abortController: AbortController;
   promise?: Promise<string>;
   /**
    * A caller is awaiting this agent inline (`spawnAndWait`) — what
@@ -197,16 +197,14 @@ export interface AgentRecord {
    * Promise.all tool batch.
    */
   startGate?: Promise<void>;
-  groupId?: string;
-  joinMode?: JoinMode;
   /** Set when result was already consumed via get_subagent_result — suppresses completion notification. */
   resultConsumed?: boolean;
   /** Steering messages queued before the session was ready. */
   pendingSteers?: string[];
   /** Worktree info if the agent is running in an isolated worktree. */
   worktree?: { path: string; branch: string; baseSha: string; workPath: string };
-  /** Worktree cleanup result after agent completion. */
-  worktreeResult?: { hasChanges: boolean; branch?: string };
+  /** Worktree cleanup result after agent completion. `path` = changes could not be committed; the worktree was kept there. */
+  worktreeResult?: { hasChanges: boolean; branch?: string; path?: string };
   /** The tool_use_id from the original Agent tool call. */
   toolCallId?: string;
   /** Path to the streaming output transcript file. */
@@ -242,7 +240,7 @@ export interface AgentRecord {
   /** Resolved spawn params, captured for UI display. Fixed at spawn time. */
   invocation?: AgentInvocation;
   /** Nesting depth: top-level subagent = 1. */
-  depth?: number;
+  depth: number;
   /**
    * The validated `StructuredOutput` payload, as canonical JSON.
    *
@@ -252,8 +250,6 @@ export interface AgentRecord {
    * has been appended to no longer parses.
    */
   structuredJson?: string;
-  /** Whether the child needed the extra structured-output prompt. */
-  structuredRetried?: boolean;
   /** Parent agent ID for ownership-scoped nested controls. */
   parentAgentId?: string;
   /**
@@ -279,7 +275,7 @@ export interface AgentRecord {
  * model with thinking disabled reports. Display-only — spawning still takes a
  * `ThinkingLevel`, so this widening cannot leak into an invocation.
  */
-export type EffectiveThinkingLevel = ThinkingLevel | "off";
+type EffectiveThinkingLevel = ThinkingLevel | "off";
 
 export interface AgentInvocation {
   /** Short display name for tight rows, e.g. "haiku 4.5". Always set once known. */
@@ -377,8 +373,6 @@ export interface ScheduledSubagent {
   createdAt: string;
   lastRun?: string;
   lastStatus?: "success" | "error" | "running";
-  /** Refreshed on every fire and on store load. */
-  nextRun?: string;
   runCount: number;
 }
 

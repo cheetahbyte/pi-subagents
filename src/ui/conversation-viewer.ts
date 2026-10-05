@@ -249,7 +249,7 @@ export class ConversationViewer implements Component {
       this.tui.requestRender();
       return;
     }
-    if (this.stopArmed) this.stopArmed = false;
+    this.stopArmed = false;
 
     const totalLines = this.buildContentLines(this.lastInnerW).length;
     const viewportHeight = this.viewportHeight();
@@ -327,7 +327,7 @@ export class ConversationViewer implements Component {
     if (invocationLine) lines.push(row(invocationLine));
     lines.push(hrMid);
 
-    // Content area — rebuild every render (live data, no cache needed)
+    // Content area — rebuilt every render (live data)
     const contentLines = this.buildContentLines(innerW);
     const viewportHeight = this.viewportHeight();
     const maxScroll = Math.max(0, contentLines.length - viewportHeight);
@@ -471,7 +471,7 @@ export class ConversationViewer implements Component {
     this.tui.requestRender();
   }
 
-  invalidate(): void { /* no cached state to clear */ }
+  invalidate(): void {}
 
   dispose(): void {
     this.closed = true;
@@ -536,9 +536,7 @@ export class ConversationViewer implements Component {
         const toolCalls: string[] = [];
         for (const c of msg.content) {
           if (c.type === "text" && c.text) textParts.push(c.text);
-          else if (c.type === "toolCall") {
-            toolCalls.push((c as any).name ?? (c as any).toolName ?? "unknown");
-          }
+          else if (c.type === "toolCall") toolCalls.push(c.name);
         }
         if (needsSeparator) lines.push(th.fg("dim", "───"));
         lines.push(th.bold("[Assistant]"));
@@ -560,8 +558,8 @@ export class ConversationViewer implements Component {
           ? this.markdownLines(msg, text, width, true)
           : this.rawLines(text, width, true)));
         if (elided) lines.push(truncateToWidth(th.fg("dim", truncationNote(elided)), width));
-      } else if ((msg as any).role === "bashExecution") {
-        const bash = msg as any;
+      } else if (msg.role === "bashExecution") {
+        const bash = msg;
         if (needsSeparator) lines.push(th.fg("dim", "───"));
         lines.push(truncateToWidth(th.fg("muted", `  $ ${bash.command}`), width));
         if (bash.output?.trim()) {

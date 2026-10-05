@@ -49,14 +49,14 @@ import { MAX_SCRIPT_LENGTH } from "./runtime.js";
 const WORKFLOW_EXTENSION = ".js";
 
 /** The roots a `name` is looked up in, highest priority first. Project roots need a trusted project. */
-export function savedWorkflowRoots(cwd: string): string[] {
+function savedWorkflowRoots(cwd: string): string[] {
   return [
     ...(isProjectTrusted() ? [join(cwd, ".pi", "workflows"), join(cwd, ".agents", "workflows")] : []),
     join(getAgentDir(), "workflows"),
   ];
 }
 
-export type SavedWorkflow =
+type SavedWorkflow =
   | { ok: true; script: string; path: string }
   | { ok: false; message: string };
 
@@ -67,7 +67,7 @@ export type SavedWorkflow =
  * names that do exist — a model that guessed the name can correct itself from
  * the error instead of spending a turn asking.
  */
-export function readSavedWorkflow(name: string, cwd: string): SavedWorkflow {
+function readSavedWorkflow(name: string, cwd: string): SavedWorkflow {
   const trimmed = name.trim();
   if (isUnsafeName(trimmed)) {
     return {
@@ -137,7 +137,7 @@ export function resolveWorkflowSource(
 }
 
 /** Every saved workflow name, de-duplicated across roots and sorted. */
-export function listSavedWorkflows(cwd: string): string[] {
+function listSavedWorkflows(cwd: string): string[] {
   const names = new Set<string>();
   for (const root of savedWorkflowRoots(cwd)) {
     if (!existsSync(root) || isSymlink(root)) continue;
@@ -187,23 +187,18 @@ export function resolveWorkflowScript(
   params: { script?: string; scriptPath?: string; name?: string },
   cwd: string,
 ): { ok: true; script: string; scriptPath?: string } | { ok: false; message: string } {
-  const path = params.scriptPath?.trim();
-  if (path !== undefined && path !== "") {
-    const resolved = resolveWorkflowSource({ scriptPath: path }, cwd);
-    return resolved.ok ? { ok: true, script: resolved.script, scriptPath: resolved.path } : resolved;
-  }
-  const script = params.script;
-  if (script !== undefined && script.trim() !== "") return { ok: true, script };
+  const { script } = params;
+  const hasPath = (params.scriptPath?.trim() ?? "") !== "";
+  if (!hasPath && script !== undefined && script.trim() !== "") return { ok: true, script };
 
   // A saved workflow is the same source by another route, so it reports its
   // file as `scriptPath`: the "edit the file and re-run" loop then works on a
   // named workflow without the author having to find where it lives. Shared
   // with a script's nested `workflow()`, so one definition decides what a
   // reference means.
-  const name = params.name?.trim();
-  if (name !== undefined && name !== "") {
-    const saved = resolveWorkflowSource({ name }, cwd);
-    return saved.ok ? { ok: true, script: saved.script, scriptPath: saved.path } : saved;
+  if (hasPath || (params.name?.trim() ?? "") !== "") {
+    const source = resolveWorkflowSource(hasPath ? { scriptPath: params.scriptPath } : { name: params.name }, cwd);
+    return source.ok ? { ok: true, script: source.script, scriptPath: source.path } : source;
   }
 
   const known = listSavedWorkflows(cwd);

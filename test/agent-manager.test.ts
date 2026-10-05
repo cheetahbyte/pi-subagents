@@ -2174,6 +2174,28 @@ describe("AgentManager — background resume", () => {
     expect(onComplete).not.toHaveBeenCalled();
   });
 
+  it("a foreground resume cannot be re-entered, and abort() stops it for good", async () => {
+    manager = new AgentManager();
+    const id = await spawnSettled(manager);
+
+    // Ends on its abort signal, or by itself shortly after — an abort that does
+    // not reach the run lets it finish and report "completed".
+    vi.mocked(resumeAgent).mockReset();
+    vi.mocked(resumeAgent).mockImplementation(
+      (_session, _prompt, opts) => new Promise((resolve) => {
+        opts?.signal?.addEventListener("abort", () => resolve({ text: "" }));
+        setTimeout(() => resolve({ text: "ran to completion" }), 50);
+      }),
+    );
+
+    const inFlight = manager.resume(id, "go");
+    expect(await manager.resume(id, "again")).toBeUndefined();
+    expect(resumeAgent).toHaveBeenCalledTimes(1);
+
+    expect(manager.abort(id)).toBe(true);
+    expect((await inFlight)?.status).toBe("stopped");
+  });
+
   // A detached resume returns while the record is still "running", so nothing
   // stops a second resume of the same agent. Starting one would replace
   // record.abortController — leaving the live run unreachable from /agents stop
@@ -2577,7 +2599,6 @@ describe("AgentManager — pending parent questions", () => {
       childAgentId: childId,
       parentAgentId: undefined,
       question: "which repo?",
-      createdAt: expect.any(Number),
     });
     expect("resolve" in q).toBe(false);
     expect("reject" in q).toBe(false);

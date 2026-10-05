@@ -197,7 +197,6 @@ describe("cloning the conversation", () => {
     // thinking_level_change entry, so a session where nobody ran /think reports
     // "off". Passing that would silently think less than the user asked for;
     // omitting it lets createAgentSession resolve the real level from settings.
-    // Also the Pi <0.82.0 path, where ctx has no thinkingLevel at all.
     buildSessionContext.mockReturnValue({ messages: CONVERSATION, thinkingLevel: "off", model: null } as any);
     const o = opts({ ctx: mainCtx({ thinkingLevel: undefined }) });
     cloneSession(callsAgent());

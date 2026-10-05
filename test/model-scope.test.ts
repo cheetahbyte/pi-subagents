@@ -36,9 +36,6 @@ describe("checkModelScope", () => {
   let prevEnabled: boolean;
 
   beforeEach(() => {
-    // resolveEnabledModels memoizes on (patterns, mtime+size of both settings
-    // files). A fresh project dir per test keeps one case's allowlist from
-    // being served to the next.
     projectDir = mkdtempSync(join(tmpdir(), "pi-scope-project-"));
     agentDir = mkdtempSync(join(tmpdir(), "pi-scope-global-"));
     prevAgentDir = process.env.PI_CODING_AGENT_DIR;

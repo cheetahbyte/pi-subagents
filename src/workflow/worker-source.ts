@@ -175,14 +175,6 @@ let realmObjectPrototype = null;
 let realmParse = null;
 
 /**
- * The top-level script's scope.
- *
- * Module-scope because a nested \`workflow()\` needs the realm-native function
- * compiler that \`main()\` builds, and because the compiled child function is
- * cached per body — see {@link workflowIn}.
- */
-let rootScope = null;
-/**
  * The vm context every script runs in.
  *
  * Held so a nested \`workflow()\` can compile its child there. Compiled from
@@ -255,7 +247,6 @@ function assertBoundary(value, path, seen) {
 
 function checkBoundary(value, path) {
   assertBoundary(value, path, new Set());
-  return value;
 }
 
 /* ------------------------------------------------------------------ *
@@ -332,9 +323,6 @@ const AGENT_OPTIONS = [
   "effort",
   "schema",
 ];
-
-/** Claude Code options this runtime does not have, and why. */
-const UNSUPPORTED_AGENT_OPTIONS = {};
 
 /* ------------------------------------------------------------------ *
  * Script globals
@@ -448,11 +436,8 @@ async function agentIn(scope, prompt, opts) {
 
   for (const key of Object.keys(options)) {
     if (AGENT_OPTIONS.indexOf(key) !== -1) continue;
-    const why = UNSUPPORTED_AGENT_OPTIONS[key];
     throw new Error(
-      why !== undefined
-        ? "agent() opts." + key + " is not supported here: " + why
-        : "agent() opts." + key + " is not a recognised option. Supported: " + AGENT_OPTIONS.join(", ") + "."
+      "agent() opts." + key + " is not a recognised option. Supported: " + AGENT_OPTIONS.join(", ") + "."
     );
   }
 
@@ -708,25 +693,23 @@ async function workflowIn(scope, nameOrRef, args) {
  * \`spent()\` is real. It differs from Claude Code's in scope: theirs pools the
  * main loop and every workflow in the turn, ours counts this run's agents.
  */
-function makeBudget() {
-  return {
-    total: null,
-    spent: function () {
-      return spentOutput;
-    },
-    remaining: function () {
-      // Infinity, not a number, because there is no target to subtract from.
-      return Infinity;
-    },
-  };
-}
+const budget = {
+  total: null,
+  spent: function () {
+    return spentOutput;
+  },
+  remaining: function () {
+    // Infinity, not a number, because there is no target to subtract from.
+    return Infinity;
+  },
+};
 
 /* ------------------------------------------------------------------ *
  * Run
  * ------------------------------------------------------------------ */
 
 async function main() {
-  rootScope = makeScope(undefined, 0);
+  const rootScope = makeScope(undefined, 0);
   const sandbox = {
     agent: rootScope.agent,
     parallel: parallel,
@@ -734,7 +717,7 @@ async function main() {
     phase: rootScope.phase,
     log: rootScope.log,
     workflow: rootScope.workflow,
-    budget: makeBudget(),
+    budget: budget,
     console: rootScope.console,
   };
   const context = vm.createContext(sandbox, {
@@ -775,7 +758,6 @@ main().catch(function (error) {
   port.postMessage({
     type: "error",
     message: error && error.message ? String(error.message) : String(error),
-    stack: error && error.stack ? String(error.stack) : undefined,
   });
 });
 `;

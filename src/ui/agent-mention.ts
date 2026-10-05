@@ -53,7 +53,7 @@ import type { AgentRecord, AgentTombstone } from "../types.js";
  * of the type registry, but the popup must agree with the widget,
  * which renders the label rather than the raw type.
  */
-export type MentionTarget =
+type MentionTarget =
   | { kind: "record"; handle: string; record: AgentRecord; typeLabel: string }
   | { kind: "tombstone"; handle: string; entry: AgentTombstone; typeLabel: string }
   | { kind: "type"; handle: string; type: string; description: string };
@@ -89,7 +89,7 @@ export function mentionRoster(
   for (const record of records) {
     const handle = record.alias ?? record.handle!;
     taken.add(handle.toLowerCase());
-    if (record.handle) taken.add(record.handle.toLowerCase());
+    taken.add(record.handle!.toLowerCase());
     targets.push({ kind: "record", handle, record, typeLabel: displayNameOf(record.type) });
   }
 

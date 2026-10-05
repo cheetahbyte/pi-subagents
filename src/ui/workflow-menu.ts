@@ -46,9 +46,6 @@ async function showWorkflowDialog(
   task: WorkflowTask,
   deps: WorkflowMenuDeps,
 ): Promise<void> {
-  // Overlaid on the same terms as the conversation viewer. Inline, the frame
-  // would render into the conversation and stay in the scrollback after it
-  // closed.
   /**
    * This dialog's own overlay, so `c` can hide it while the conversation is
    * up. Overlays stack, so the viewer would render *over* it either way —
@@ -58,6 +55,9 @@ async function showWorkflowDialog(
    * closes.
    */
   let overlay: { setHidden(hidden: boolean): void } | undefined;
+  // Overlaid on the same terms as the conversation viewer. Inline, the frame
+  // would render into the conversation and stay in the scrollback after it
+  // closed.
   await ctx.ui.custom<undefined>(
     (tui, theme, _keybindings, done) =>
       new WorkflowDialog(

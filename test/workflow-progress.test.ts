@@ -5,11 +5,8 @@ import {
   collapse,
   displayState,
   elapsedMs,
-  footerPhaseLabel,
   formatDuration,
-  gerund,
   header,
-  isLive,
   sizeWarning,
   stats,
   type WorkflowAgentEntry,
@@ -74,12 +71,11 @@ describe("displayState", () => {
   const cases: [string, Partial<WorkflowAgentEntry>, boolean, string][] = [
     ["done wins outright", { state: "done" }, true, "done"],
     ["error + skipped", { state: "error", skipped: true }, true, "skipped"],
-    ["error + blocked", { state: "error", blocked: true }, true, "blocked"],
     ["bare error", { state: "error" }, true, "failed"],
-    ["live but run stopped", { state: "progress" }, false, "interrupted"],
+    ["live but run stopped", { state: "start" }, false, "interrupted"],
     ["queued with no start", { state: "start", queuedAt: 5 }, true, "queued"],
     ["queued then started", { state: "start", queuedAt: 5, startedAt: 6 }, true, "running"],
-    ["no queuedAt at all", { state: "progress" }, true, "running"],
+    ["no queuedAt at all", { state: "start" }, true, "running"],
   ];
 
   for (const [name, partial, active, expected] of cases) {
@@ -88,22 +84,8 @@ describe("displayState", () => {
     });
   }
 
-  it("prefers skipped over blocked when both are set", () => {
-    const entry = agentEntry({ index: 0, state: "error", skipped: true, blocked: true });
-    expect(displayState(entry, true)).toBe("skipped");
-  });
-
   it("reports done even after the run stops", () => {
     expect(displayState(agentEntry({ index: 0, state: "done" }), false)).toBe("done");
-  });
-});
-
-describe("isLive", () => {
-  it("is true only for start and progress", () => {
-    expect(isLive(agentEntry({ index: 0, state: "start" }))).toBe(true);
-    expect(isLive(agentEntry({ index: 0, state: "progress" }))).toBe(true);
-    expect(isLive(agentEntry({ index: 0, state: "done" }))).toBe(false);
-    expect(isLive(agentEntry({ index: 0, state: "error" }))).toBe(false);
   });
 });
 
@@ -232,30 +214,9 @@ describe("buildPhaseGroups", () => {
     it("is running while any agent is still live", () => {
       const groups = buildPhaseGroups([
         agentEntry({ index: 0, state: "done" }),
-        agentEntry({ index: 1, state: "progress" }),
+        agentEntry({ index: 1, state: "start" }),
       ]);
       expect(groups[0].status).toBe("running");
-    });
-
-    it("sums tokens across agents", () => {
-      const groups = buildPhaseGroups([
-        agentEntry({ index: 0, tokens: 100 }),
-        agentEntry({ index: 1, tokens: 250 }),
-      ]);
-      expect(groups[0].tokens).toBe(350);
-    });
-
-    it("measures phase duration as wall clock, not the sum of overlapping agents", () => {
-      const groups = buildPhaseGroups([
-        agentEntry({ index: 0, startedAt: 1000, lastProgressAt: 3000 }),
-        agentEntry({ index: 1, startedAt: 1500, lastProgressAt: 4000 }),
-      ]);
-      expect(groups[0].durationMs).toBe(3000); // 4000 - 1000, not 2000 + 2500
-    });
-
-    it("reports zero duration when nothing started", () => {
-      const groups = buildPhaseGroups([agentEntry({ index: 0, queuedAt: 5 })]);
-      expect(groups[0].durationMs).toBe(0);
     });
   });
 });
@@ -266,17 +227,16 @@ describe("stats", () => {
       agentEntry({ index: 0, state: "done" }),
       agentEntry({ index: 1, state: "error" }),
     ]);
-    expect(result).toMatchObject({ done: 1, failedCount: 1, started: 2, running: false });
+    expect(result).toMatchObject({ done: 1, started: 2 });
   });
 
   it("does not count a queued-but-unstarted agent as started", () => {
     const result = stats([agentEntry({ index: 0, state: "start", queuedAt: 5 })]);
     expect(result.started).toBe(0);
-    expect(result.running).toBe(true);
   });
 
   it("counts a live agent with no queuedAt as started", () => {
-    const result = stats([agentEntry({ index: 0, state: "progress" })]);
+    const result = stats([agentEntry({ index: 0, state: "start" })]);
     expect(result.started).toBe(1);
   });
 
@@ -284,27 +244,6 @@ describe("stats", () => {
     // A fan-out reports its size before its agents emit anything.
     const result = stats([agentEntry({ index: 0, state: "done" })], 7);
     expect(result.total).toBe(7);
-    expect(result.complete).toBe(false);
-  });
-
-  it("is complete only when nothing is live and every scheduled agent settled", () => {
-    const result = stats(
-      [agentEntry({ index: 0, state: "done" }), agentEntry({ index: 1, state: "error" })],
-      2,
-    );
-    expect(result.complete).toBe(true);
-  });
-
-  it("is not complete when an agent is still live", () => {
-    const result = stats([
-      agentEntry({ index: 0, state: "done" }),
-      agentEntry({ index: 1, state: "progress" }),
-    ]);
-    expect(result.complete).toBe(false);
-  });
-
-  it("is not complete for an empty log", () => {
-    expect(stats([]).complete).toBe(false);
   });
 
   it("ignores log and phase entries", () => {
@@ -353,7 +292,7 @@ describe("header", () => {
   it("renders count and elapsed with no phase count", () => {
     const groups = buildPhaseGroups([
       agentEntry({ index: 0, state: "done" }),
-      agentEntry({ index: 1, state: "progress" }),
+      agentEntry({ index: 1, state: "start" }),
     ]);
     const line = header(task, meta, groups, 7, 73_000);
     expect(line.stats).toBe("1/7 agents · 1m12s");
@@ -391,109 +330,29 @@ describe("header", () => {
 
 describe("sizeWarning", () => {
   it("stays silent for an ordinary run", () => {
-    expect(sizeWarning({ scheduledAgents: 5, startedAgents: 5, totalTokens: 10_000 })).toBeUndefined();
+    expect(sizeWarning({ scheduledAgents: 5, startedAgents: 5, totalTokens: 10_000 })).toBe(false);
   });
 
   it("fires on the agent axis past the cap", () => {
-    const warning = sizeWarning({ scheduledAgents: 26, startedAgents: 1, totalTokens: 10 });
-    expect(warning?.axis).toBe("agents");
+    expect(sizeWarning({ scheduledAgents: 26, startedAgents: 1, totalTokens: 10 })).toBe(true);
   });
 
   it("does not fire exactly at the cap", () => {
-    expect(sizeWarning({ scheduledAgents: 25, startedAgents: 25, totalTokens: 10 })).toBeUndefined();
+    expect(sizeWarning({ scheduledAgents: 25, startedAgents: 25, totalTokens: 10 })).toBe(false);
   });
 
   it("projects spend from agents that have already reported", () => {
     // 10 started at 100k each, 20 scheduled → projects 2M, over the 1.5M cap.
-    const warning = sizeWarning({ scheduledAgents: 20, startedAgents: 10, totalTokens: 1_000_000 });
-    expect(warning?.axis).toBe("tokens");
-    expect(warning?.projectedTokens).toBe(2_000_000);
+    expect(sizeWarning({ scheduledAgents: 20, startedAgents: 10, totalTokens: 1_000_000 })).toBe(true);
   });
 
   it("assumes a per-agent cost before anything has started", () => {
     // 22 agents × 70k assumed = 1.54M, over cap, while under the agent cap.
-    const warning = sizeWarning({ scheduledAgents: 22, startedAgents: 0, totalTokens: 0 });
-    expect(warning?.axis).toBe("tokens");
-    expect(warning?.projectedTokens).toBe(1_540_000);
-  });
-
-  it("reports both axes together", () => {
-    const warning = sizeWarning({ scheduledAgents: 100, startedAgents: 0, totalTokens: 0 });
-    expect(warning?.axis).toBe("both");
-  });
-
-  it("honours overridden caps", () => {
-    const warning = sizeWarning({ scheduledAgents: 3, startedAgents: 3, totalTokens: 1, agentCap: 2 });
-    expect(warning?.axis).toBe("agents");
-    expect(warning?.agentCap).toBe(2);
+    expect(sizeWarning({ scheduledAgents: 22, startedAgents: 0, totalTokens: 0 })).toBe(true);
+    expect(sizeWarning({ scheduledAgents: 21, startedAgents: 0, totalTokens: 0 })).toBe(false);
   });
 
   it("never projects below what has already been spent", () => {
-    const warning = sizeWarning({ scheduledAgents: 1, startedAgents: 10, totalTokens: 2_000_000 });
-    expect(warning?.projectedTokens).toBe(2_000_000);
-  });
-});
-
-describe("gerund", () => {
-  it.each([
-    ["Scan", "Scanning"],
-    ["Review", "Reviewing"],
-    ["commit", "committing"],
-    ["Commit", "Committing"],
-    ["submit", "submitting"],
-    ["format", "formatting"],
-    ["Verify", "Verifying"],
-    ["run", "running"],
-    ["tie", "tying"],
-  ])("turns %s into %s", (input, expected) => {
-    expect(gerund(input)).toBe(expected);
-  });
-
-  it.each([
-    ["setup"],
-    ["cleanup"],
-    ["Running"],
-  ])("leaves %s alone", input => {
-    expect(gerund(input)).toBe(input);
-  });
-
-  it.each([
-    ["QA"],
-    ["a-very-long-phase-title"],
-    ["Phase 1"],
-  ])("leaves the non-word %s alone", input => {
-    expect(gerund(input)).toBe(input);
-  });
-
-  it("does not double a final w, x or y", () => {
-    expect(gerund("saw")).toBe("sawing");
-    expect(gerund("fix")).toBe("fixing");
-  });
-});
-
-describe("footerPhaseLabel", () => {
-  it("shows position for a single active phase", () => {
-    expect(footerPhaseLabel({ titles: ["Scan"], positionStart: 1, totalPhases: 3 }))
-      .toBe("Scanning (1/3)");
-  });
-
-  it("joins two concurrent phases", () => {
-    expect(footerPhaseLabel({ titles: ["Scan", "Verify"], positionStart: 1, totalPhases: 3 }))
-      .toBe("Scanning & Verifying");
-  });
-
-  it("truncates a long title", () => {
-    // Too long to be gerund-ized, so it reaches truncation unchanged.
-    const label = footerPhaseLabel({ titles: ["Comprehensive review"], positionStart: 1, totalPhases: 2 });
-    expect(label).toBe("Comprehensive r… (1/2)");
-  });
-
-  it("leaves a title that exactly fits alone", () => {
-    const label = footerPhaseLabel({ titles: ["Sixteen chars!!!"], positionStart: 1, totalPhases: 2 });
-    expect(label).toBe("Sixteen chars!!! (1/2)");
-  });
-
-  it("returns empty when no phase is active", () => {
-    expect(footerPhaseLabel({ titles: [], positionStart: 0, totalPhases: 0 })).toBe("");
+    expect(sizeWarning({ scheduledAgents: 1, startedAgents: 10, totalTokens: 2_000_000 })).toBe(true);
   });
 });

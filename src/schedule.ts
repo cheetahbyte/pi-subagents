@@ -3,7 +3,7 @@
  *
  * Mirrors the engine shape of pi-cron-schedule/src/scheduler.ts:
  *   - two-Map split (jobs = croner Cron, intervals = setInterval/setTimeout)
- *   - addJob/removeJob/updateJob/scheduleJob/unscheduleJob/executeJob
+ *   - addJob/removeJob/scheduleJob/unscheduleJob/executeJob
  *   - static parsers for cron / "+10m" / "5m" / ISO formats
  *
  * Differences vs pi-cron-schedule:
@@ -27,7 +27,7 @@ import type { IsolationMode, ScheduledSubagent, SubagentType, ThinkingLevel } fr
 import { type CompiledSchema, compileJsonSchema } from "./workflow/json-schema.js";
 
 /** Event emitted on `pi.events` for cross-extension consumers. */
-export type ScheduleChangeEvent =
+type ScheduleChangeEvent =
   | { type: "added"; job: ScheduledSubagent }
   | { type: "removed"; jobId: string }
   | { type: "updated"; job: ScheduledSubagent }
@@ -35,7 +35,7 @@ export type ScheduleChangeEvent =
   | { type: "error"; jobId: string; error: string };
 
 /** Params accepted at job creation — ID, timestamps, and state are derived. */
-export interface NewJobInput {
+interface NewJobInput {
   name: string;
   description: string;
   schedule: string;
@@ -52,6 +52,8 @@ export interface NewJobInput {
 export class SubagentScheduler {
   private jobs = new Map<string, Cron>();
   private intervals = new Map<string, NodeJS.Timeout>();
+  /** When each interval job was armed or last ticked — the base its next tick is due from. */
+  private intervalTicks = new Map<string, number>();
   private store: ScheduleStore | undefined;
   private pi: ExtensionAPI | undefined;
   private ctx: ExtensionContext | undefined;
@@ -65,6 +67,9 @@ export class SubagentScheduler {
     this.store = store;
 
     for (const job of store.list()) {
+      // Nothing is running yet in a scheduler that has only just started, so
+      // this is a run the previous session never got to finalize.
+      if (job.lastStatus === "running") store.update(job.id, { lastStatus: "error" });
       if (job.enabled) this.scheduleJob(job);
     }
   }
@@ -75,6 +80,7 @@ export class SubagentScheduler {
     this.jobs.clear();
     for (const t of this.intervals.values()) clearTimeout(t);
     this.intervals.clear();
+    this.intervalTicks.clear();
     this.store = undefined;
     this.pi = undefined;
     this.ctx = undefined;
@@ -91,12 +97,16 @@ export class SubagentScheduler {
   }
 
   /**
-   * Build a `ScheduledSubagent` from user input. Validates the schedule
-   * format and tags `scheduleType`. Throws on invalid input.
+   * Add a job, persist, and arm it. Returns the stored job. Throws on a
+   * duplicate name or an invalid schedule.
    */
-  buildJob(input: NewJobInput): ScheduledSubagent {
+  addJob(input: NewJobInput): ScheduledSubagent {
+    const store = this.requireStore();
+    if (store.hasName(input.name)) {
+      throw new Error(`A scheduled job named "${input.name}" already exists.`);
+    }
     const detected = SubagentScheduler.detectSchedule(input.schedule);
-    return {
+    const job: ScheduledSubagent = {
       id: nanoid(10),
       name: input.name,
       description: input.description,
@@ -115,17 +125,8 @@ export class SubagentScheduler {
       createdAt: new Date().toISOString(),
       runCount: 0,
     };
-  }
-
-  /** Add a job, persist, and arm if enabled. Returns the stored job. */
-  addJob(input: NewJobInput): ScheduledSubagent {
-    const store = this.requireStore();
-    if (store.hasName(input.name)) {
-      throw new Error(`A scheduled job named "${input.name}" already exists.`);
-    }
-    const job = this.buildJob(input);
     store.add(job);
-    if (job.enabled) this.scheduleJob(job);
+    this.scheduleJob(job);
     this.emit({ type: "added", job });
     return job;
   }
@@ -139,17 +140,6 @@ export class SubagentScheduler {
     return ok;
   }
 
-  /** Toggle / mutate a job. Re-arms based on the new `enabled` state. */
-  updateJob(id: string, patch: Partial<ScheduledSubagent>): ScheduledSubagent | undefined {
-    const store = this.requireStore();
-    const updated = store.update(id, patch);
-    if (!updated) return undefined;
-    this.unscheduleJob(id);
-    if (updated.enabled) this.scheduleJob(updated);
-    this.emit({ type: "updated", job: updated });
-    return updated;
-  }
-
   /** Next-run time as ISO, or undefined if not currently armed. */
   getNextRun(jobId: string): string | undefined {
     const cron = this.jobs.get(jobId);
@@ -157,12 +147,11 @@ export class SubagentScheduler {
     const job = this.store?.get(jobId);
     if (!job?.enabled) return undefined;
     if (job.scheduleType === "once") return job.schedule;
-    if (job.scheduleType === "interval" && job.intervalMs) {
-      // Before the first fire there's no `lastRun`, so fall back to "now" —
-      // accurate at create time (setInterval was just armed) and within
-      // intervalMs of correct in any pre-first-fire view.
-      const base = job.lastRun ? new Date(job.lastRun).getTime() : Date.now();
-      return new Date(base + job.intervalMs).toISOString();
+    // Not `lastRun`: that is stamped when a run finishes, and the timer does
+    // not wait for it.
+    const tick = this.intervalTicks.get(jobId);
+    if (job.scheduleType === "interval" && job.intervalMs && tick !== undefined) {
+      return new Date(tick + job.intervalMs).toISOString();
     }
     return undefined;
   }
@@ -174,18 +163,23 @@ export class SubagentScheduler {
     if (!store) return;
     try {
       if (job.scheduleType === "interval" && job.intervalMs) {
-        const t = setInterval(() => this.executeJob(job.id), job.intervalMs);
+        const t = setInterval(() => {
+          this.intervalTicks.set(job.id, Date.now());
+          this.fire(job.id);
+        }, job.intervalMs);
         this.intervals.set(job.id, t);
+        this.intervalTicks.set(job.id, Date.now());
       } else if (job.scheduleType === "once") {
         const target = new Date(job.schedule).getTime();
         const delay = target - Date.now();
         if (delay > 0) {
           const t = setTimeout(() => {
-            this.executeJob(job.id);
-            // Auto-disable one-shots after they fire (mirrors pi-cron-schedule)
-            store.update(job.id, { enabled: false });
-            const updated = store.get(job.id);
-            if (updated) this.emit({ type: "updated", job: updated });
+            this.fire(job.id, () => {
+              // Auto-disable one-shots after they fire (mirrors pi-cron-schedule)
+              store.update(job.id, { enabled: false });
+              const updated = store.get(job.id);
+              if (updated) this.emit({ type: "updated", job: updated });
+            });
           }, delay);
           this.intervals.set(job.id, t);
         } else {
@@ -194,11 +188,21 @@ export class SubagentScheduler {
           this.emit({ type: "error", jobId: job.id, error: `Scheduled time ${job.schedule} is in the past` });
         }
       } else {
-        const cron = new Cron(job.schedule, () => this.executeJob(job.id));
+        const cron = new Cron(job.schedule, () => this.fire(job.id));
         this.jobs.set(job.id, cron);
       }
     } catch (err) {
       this.emit({ type: "error", jobId: job.id, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  /** Timer entry point: a store that cannot be written must not throw out of a timer. */
+  private fire(id: string, after?: () => void): void {
+    try {
+      this.executeJob(id);
+      after?.();
+    } catch (err) {
+      this.emit({ type: "error", jobId: id, error: err instanceof Error ? err.message : String(err) });
     }
   }
 
@@ -211,9 +215,9 @@ export class SubagentScheduler {
     const t = this.intervals.get(id);
     if (t) {
       clearTimeout(t);
-      clearInterval(t);
       this.intervals.delete(id);
     }
+    this.intervalTicks.delete(id);
   }
 
   /**
@@ -299,13 +303,10 @@ export class SubagentScheduler {
     this.emit({ type: "fired", jobId: id, agentId, name: job.name });
 
     const finalize = (status: "success" | "error") => {
-      const next = this.getNextRun(id);
-      const current = store.get(id);
       store.update(id, {
         lastRun: new Date().toISOString(),
         lastStatus: status,
-        runCount: (current?.runCount ?? 0) + 1,
-        nextRun: next,
+        runCount: (store.get(id)?.runCount ?? 0) + 1,
       });
     };
 
@@ -361,37 +362,28 @@ export class SubagentScheduler {
       }
     }
     // Cron — 6-field
-    const cronCheck = SubagentScheduler.validateCronExpression(trimmed);
-    if (cronCheck.valid) return { type: "cron", normalized: trimmed };
+    if (SubagentScheduler.validateCronExpression(trimmed)) return { type: "cron", normalized: trimmed };
     throw new Error(
       `Invalid schedule "${s}". Use 6-field cron (e.g. "0 0 9 * * 1" — 9am every Monday), interval ("5m"/"1h"), or one-shot ("+10m" / ISO).`
     );
   }
 
   /** 6-field cron — 'second minute hour dom month dow'. */
-  static validateCronExpression(expr: string): { valid: boolean; error?: string } {
-    const fields = expr.trim().split(/\s+/);
-    if (fields.length !== 6) {
-      return {
-        valid: false,
-        error: `Cron must have 6 fields (second minute hour dom month dow), got ${fields.length}. Example: "0 0 9 * * 1" for 9am every Monday.`,
-      };
-    }
+  static validateCronExpression(expr: string): boolean {
+    if (expr.trim().split(/\s+/).length !== 6) return false;
     try {
       // Croner validates by construction.
       new Cron(expr, () => {});
-      return { valid: true };
-    } catch (e) {
-      return { valid: false, error: e instanceof Error ? e.message : "Invalid cron expression" };
+      return true;
+    } catch {
+      return false;
     }
   }
 
   /** "+10s"/"+5m"/"+1h"/"+2d" → ISO timestamp. */
   static parseRelativeTime(s: string): string | null {
-    const m = s.match(/^\+(\d+)(s|m|h|d)$/);
-    if (!m) return null;
-    const ms = parseInt(m[1], 10) * { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "s" | "m" | "h" | "d"];
-    return new Date(Date.now() + ms).toISOString();
+    const ms = s.startsWith("+") ? SubagentScheduler.parseInterval(s.slice(1)) : null;
+    return ms === null ? null : new Date(Date.now() + ms).toISOString();
   }
 
   /** "10s"/"5m"/"1h"/"2d" → milliseconds. */

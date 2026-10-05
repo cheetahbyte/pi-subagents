@@ -25,11 +25,6 @@ export interface EventBus {
   emit(event: string, data: unknown): void;
 }
 
-/** RPC reply envelope — matches pi-mono's RpcResponse shape. */
-export type RpcReply<T = void> =
-  | { success: true; data?: T }
-  | { success: false; error: string };
-
 /** RPC protocol version — bumped when the envelope or method contracts change. */
 export const PROTOCOL_VERSION = 2;
 
@@ -60,13 +55,6 @@ export interface RpcDeps {
   manager: SpawnCapable;
 }
 
-export interface RpcHandle {
-  unsubPing: () => void;
-  unsubSpawn: () => void;
-  unsubStop: () => void;
-  unsubConsume: () => void;
-}
-
 /**
  * Wire a single RPC handler: listen on `channel`, run `fn(params)`,
  * emit the reply envelope on `channel:reply:${requestId}`.
@@ -93,9 +81,9 @@ function handleRpc<P extends { requestId: string }>(
 
 /**
  * Register ping, spawn, stop, and consume RPC handlers on the event bus.
- * Returns unsub functions for cleanup.
+ * Returns a function that unregisters all four.
  */
-export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
+export function registerRpcHandlers(deps: RpcDeps): () => void {
   const { events, pi, getCtx, manager } = deps;
 
   const unsubPing = handleRpc(events, "subagents:rpc:ping", () => {
@@ -204,5 +192,10 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
     },
   );
 
-  return { unsubPing, unsubSpawn, unsubStop, unsubConsume };
+  return () => {
+    unsubPing();
+    unsubSpawn();
+    unsubStop();
+    unsubConsume();
+  };
 }

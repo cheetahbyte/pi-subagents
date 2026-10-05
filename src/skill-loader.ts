@@ -26,7 +26,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { isSymlink, isUnsafeName, safeReadFile } from "./memory.js";
 import { isProjectTrusted } from "./project-trust.js";
 
-export interface PreloadedSkill {
+interface PreloadedSkill {
   name: string;
   content: string;
 }
@@ -74,7 +74,6 @@ function findInRoot(root: string, name: string): string | undefined {
 
 /** BFS under `root` for a directory named `name` containing `SKILL.md`. Pi-conforming filters. */
 function findSkillDirectory(root: string, name: string): string | undefined {
-  if (!existsSync(root)) return undefined;
   const queue: string[] = [root];
 
   while (queue.length > 0) {

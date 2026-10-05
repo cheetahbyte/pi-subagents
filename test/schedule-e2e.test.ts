@@ -150,7 +150,9 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
     });
     // Replace with a literal 100ms interval — easier than crafting a parseable shorthand for ms.
     // (parseInterval doesn't accept "ms"; we patch the persisted job and re-arm.)
-    scheduler.updateJob(job.id, { intervalMs: 100, schedule: "100ms" });
+    store.update(job.id, { intervalMs: 100, schedule: "100ms" });
+    scheduler.stop();
+    scheduler.start(pi, makeCtx(), manager, store);
 
     await waitFor(() => manager.spawn.mock.calls.length >= 3, 2000);
 

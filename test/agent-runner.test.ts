@@ -92,8 +92,6 @@ vi.mock("../src/agent-types.js", () => ({
     runInBackground: false,
     isolated: false,
   })),
-  getMemoryToolNames: vi.fn(() => []),
-  getReadOnlyMemoryToolNames: vi.fn(() => []),
   getToolNamesForType: vi.fn(() => ["read"]),
 }));
 
@@ -165,7 +163,7 @@ function createSession(finalText: string) {
       });
     }),
     abort: vi.fn(),
-    steer: vi.fn(),
+    steer: vi.fn(async () => {}),
     // Stateful, so the active set reflects what the scope installer actually did
     // and `renarrow`'s no-op guard behaves as it does against real pi.
     getActiveToolNames: vi.fn(() => activeToolNames),
@@ -305,7 +303,7 @@ describe("agent-runner final output capture", () => {
     expect(vi.mocked(buildAgentPrompt).mock.lastCall![4]).not.toHaveProperty("workflowChild");
   });
 
-  it("passes the parent model runtime while retaining the legacy model registry", async () => {
+  it("passes the parent model runtime", async () => {
     const { session } = createSession("AUTHENTICATED");
     createAgentSession.mockResolvedValue({ session });
     const modelRuntime = { getAuth: vi.fn(), hasConfiguredAuth: vi.fn() };
@@ -316,10 +314,7 @@ describe("agent-runner final output capture", () => {
 
     await runAgent(context, "Explore", "Say AUTHENTICATED", { pi });
 
-    expect(createAgentSession).toHaveBeenCalledWith(expect.objectContaining({
-      modelRegistry: context.modelRegistry,
-      modelRuntime,
-    }));
+    expect(createAgentSession).toHaveBeenCalledWith(expect.objectContaining({ modelRuntime }));
   });
 
   it("omits modelRuntime when the legacy registry does not expose one", async () => {
@@ -692,7 +687,7 @@ describe("getAgentConversation", () => {
     expect(out).toBe("[User]: from blocks");
   });
 
-  it("emits a [Tool Calls] block listing each toolCall by name or toolName, falling back to 'unknown'", () => {
+  it("emits a [Tool Calls] block listing each toolCall by name", () => {
     const out = getAgentConversation(
       fakeSession([
         {
@@ -700,14 +695,13 @@ describe("getAgentConversation", () => {
           content: [
             { type: "text", text: "calling tools" },
             { type: "toolCall", name: "search" },
-            { type: "toolCall", toolName: "edit" },
-            { type: "toolCall" },
+            { type: "toolCall", name: "edit" },
           ],
         },
       ]),
     );
     expect(out).toContain("[Assistant]: calling tools");
-    expect(out).toContain("[Tool Calls]:\n  Tool: search\n  Tool: edit\n  Tool: unknown");
+    expect(out).toContain("[Tool Calls]:\n  Tool: search\n  Tool: edit");
   });
 
   it("truncates toolResult content beyond 200 chars and tags it with the tool name", () => {
@@ -2939,6 +2933,19 @@ describe("agent-runner abort signal forwarding", () => {
     await runAgent(ctx, "Explore", "go", { pi });
 
     expect(session.abort).not.toHaveBeenCalled();
+  });
+
+  it("never prompts when the signal aborted while the session was being built", async () => {
+    // An abort event fires once; a listener attached afterwards never hears it.
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig());
+    const controller = new AbortController();
+    controller.abort();
+    const { session } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "go", { pi, signal: controller.signal });
+
+    expect(session.prompt).not.toHaveBeenCalled();
   });
 });
 

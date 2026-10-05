@@ -63,8 +63,7 @@ describe("cross-extension RPC", () => {
     });
 
     it("unsub stops responding to pings", async () => {
-      const { unsubPing } = registerRpcHandlers(deps);
-      unsubPing();
+      registerRpcHandlers(deps)();
 
       const reply = vi.fn();
       events.on("subagents:rpc:ping:reply:req-1", reply);
@@ -175,8 +174,7 @@ describe("cross-extension RPC", () => {
     });
 
     it("unsub stops responding to spawns", async () => {
-      const { unsubSpawn } = registerRpcHandlers(deps);
-      unsubSpawn();
+      registerRpcHandlers(deps)();
 
       const reply = vi.fn();
       events.on("subagents:rpc:spawn:reply:req-s6", reply);
@@ -278,8 +276,7 @@ describe("cross-extension RPC", () => {
     });
 
     it("unsub stops responding to stop requests", async () => {
-      const { unsubStop } = registerRpcHandlers(deps);
-      unsubStop();
+      registerRpcHandlers(deps)();
 
       const reply = vi.fn();
       events.on("subagents:rpc:stop:reply:req-st4", reply);
@@ -316,8 +313,7 @@ describe("cross-extension RPC", () => {
     });
 
     it("unsub stops responding to consume requests", async () => {
-      const { unsubConsume } = registerRpcHandlers(deps);
-      unsubConsume();
+      registerRpcHandlers(deps)();
 
       const reply = vi.fn();
       events.on("subagents:rpc:consume:reply:req-c3", reply);
@@ -478,9 +474,7 @@ describe("cross-extension RPC", () => {
     let prevEnabled: boolean;
 
     beforeEach(() => {
-      // resolveEnabledModels memoizes on (patterns, mtime+size of both settings
-      // files) — a fresh project dir per test keeps one case's allowlist from
-      // being served to the next. Same harness as test/model-scope.test.ts.
+      // Same harness as test/model-scope.test.ts.
       projectDir = mkdtempSync(join(tmpdir(), "pi-rpc-scope-project-"));
       agentDir = mkdtempSync(join(tmpdir(), "pi-rpc-scope-global-"));
       prevAgentDir = process.env.PI_CODING_AGENT_DIR;

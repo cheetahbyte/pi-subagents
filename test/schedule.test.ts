@@ -3,7 +3,7 @@
  *
  * Tests:
  *   - Static format parsers (cron / relative / interval / detection)
- *   - Job lifecycle (add / update / remove / cleanup)
+ *   - Job lifecycle (add / remove / cleanup)
  *   - Fire path (interval, one-shot) with mocked AgentManager + fake timers
  *   - Past-timestamp rejection
  *   - One-shot auto-disable
@@ -72,10 +72,10 @@ describe("SubagentScheduler — static format parsers", () => {
   });
 
   it("validateCronExpression rejects non-6-field expressions", () => {
-    expect(SubagentScheduler.validateCronExpression("* * * * *").valid).toBe(false);  // 5 fields
-    expect(SubagentScheduler.validateCronExpression("0 0 9 * * 1").valid).toBe(true);
-    expect(SubagentScheduler.validateCronExpression("0 0 9 * * *").valid).toBe(true);
-    expect(SubagentScheduler.validateCronExpression("not-a-cron").valid).toBe(false);
+    expect(SubagentScheduler.validateCronExpression("* * * * *")).toBe(false);  // 5 fields
+    expect(SubagentScheduler.validateCronExpression("0 0 9 * * 1")).toBe(true);
+    expect(SubagentScheduler.validateCronExpression("0 0 9 * * *")).toBe(true);
+    expect(SubagentScheduler.validateCronExpression("not-a-cron")).toBe(false);
   });
 
   it("detectSchedule tags type and normalizes input", () => {
@@ -116,6 +116,16 @@ describe("SubagentScheduler — lifecycle", () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
+  it("start() clears a 'running' status left by a session that ended mid-run", () => {
+    const job = scheduler.addJob({ name: "stale", description: "d", schedule: "5m", subagent_type: "general-purpose", prompt: "p" });
+    store.update(job.id, { lastStatus: "running" });
+    scheduler.stop();
+
+    scheduler.start(pi, ctx, manager, store);
+
+    expect(store.get(job.id)?.lastStatus).toBe("error");
+  });
+
   it("isActive() reports start/stop state", () => {
     expect(scheduler.isActive()).toBe(true);
     scheduler.stop();
@@ -149,13 +159,6 @@ describe("SubagentScheduler — lifecycle", () => {
     expect(pi.events.emit).toHaveBeenCalledWith("subagents:scheduled", expect.objectContaining({ type: "removed", jobId: job.id }));
   });
 
-  it("updateJob({enabled: false}) unschedules but keeps the record", () => {
-    const job = scheduler.addJob({ name: "j1", description: "x", schedule: "1h", subagent_type: "general-purpose", prompt: "p" });
-    scheduler.updateJob(job.id, { enabled: false });
-    expect(scheduler.list()[0].enabled).toBe(false);
-    expect(scheduler.getNextRun(job.id)).toBeUndefined();
-  });
-
   // Regression: getNextRun on a freshly-created interval used to return undefined
   // (the lastRun-based branch needs lastRun, which is undefined before first fire),
   // surfacing as "Next run: (unknown)" in the agent's create-response.
@@ -171,18 +174,6 @@ describe("SubagentScheduler — lifecycle", () => {
     // Should be ~now + 1h, with a small tolerance for the time spent in the call
     expect(t - before).toBeGreaterThanOrEqual(3_600_000 - 1_000);
     expect(t - before).toBeLessThanOrEqual(3_600_000 + 1_000);
-  });
-
-  // Once a fire happens and `lastRun` is set, getNextRun should pivot to it.
-  it("getNextRun uses lastRun when present for interval jobs", () => {
-    const job = scheduler.addJob({
-      name: "ran-once", description: "x", schedule: "1h",
-      subagent_type: "general-purpose", prompt: "p",
-    });
-    const lastRun = new Date(Date.now() - 30 * 60_000).toISOString(); // 30m ago
-    scheduler.updateJob(job.id, { lastRun });
-    const next = scheduler.getNextRun(job.id);
-    expect(next).toBe(new Date(new Date(lastRun).getTime() + 3_600_000).toISOString());
   });
 
   it("rejects past one-shot timestamps upfront — no record created", () => {
@@ -364,9 +355,23 @@ describe("SubagentScheduler — fire path", () => {
       name: "off", description: "x", schedule: "1s",
       subagent_type: "general-purpose", prompt: "x",
     });
-    scheduler.updateJob(job.id, { enabled: false });
+    store.update(job.id, { enabled: false });
     vi.advanceTimersByTime(5_000);
     expect(manager.spawn).toHaveBeenCalledTimes(0);
+  });
+
+  it("getNextRun for an interval follows the timer, not when the last run finished", async () => {
+    manager.getRecord.mockImplementation(() => ({ promise: new Promise(r => setTimeout(() => r("done"), 4_000)) }));
+    const armedAt = Date.now();
+    const job = scheduler.addJob({
+      name: "cadence", description: "x", schedule: "10s",
+      subagent_type: "general-purpose", prompt: "x",
+    });
+
+    await vi.advanceTimersByTimeAsync(14_000); // fires at 10s, run finishes at 14s
+    expect(store.get(job.id)?.lastStatus).toBe("success");
+
+    expect(scheduler.getNextRun(job.id)).toBe(new Date(armedAt + 20_000).toISOString());
   });
 
   it("emits fired event with agentId on successful spawn", () => {

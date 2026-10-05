@@ -14,11 +14,11 @@ import type { ScheduledSubagent } from "../types.js";
 import { selectItem } from "./select-item.js";
 
 /** Format an ISO timestamp as relative time ("in 4h", "2d ago", "—"). */
-function relTime(iso: string | undefined, now = Date.now()): string {
+function relTime(iso: string | undefined): string {
   if (!iso) return "—";
   const t = new Date(iso).getTime();
   if (Number.isNaN(t)) return "—";
-  const diff = t - now;
+  const diff = t - Date.now();
   const abs = Math.abs(diff);
   const future = diff > 0;
   if (abs < 60_000) return future ? "in <1m" : "<1m ago";

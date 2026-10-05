@@ -763,7 +763,6 @@ describe("run control", () => {
 
     await until(() => stub.started().length === 1, "the first agent to start");
     control?.pause();
-    expect(control?.isPaused()).toBe(true);
     stub.finish("wf-agent-0", "first");
 
     // The second call is held at the gate — it must not reach the host.
@@ -792,6 +791,53 @@ describe("run control", () => {
     expect(stub.aborted()).toEqual(["wf-agent-0"]);
     expect(result.value).toBeNull();
     expect(agentEntries(result.progress).at(-1)).toMatchObject({ state: "error", skipped: true });
+  });
+
+  it("skips an agent whose gate is still running", async () => {
+    const stub = controllableHost();
+    let finishGate: ((r: { ok: boolean; output: string }) => void) | undefined;
+    stub.host.runGate = () => new Promise(resolve => { finishGate = resolve; });
+    let control: WorkflowControl | undefined;
+    const done = run("return await agent('one', { gate: 'npm test' });", {
+      host: stub.host,
+      onControl: c => { control = c; },
+    });
+
+    await until(() => stub.started().length === 1, "the agent to start");
+    stub.finish("wf-agent-0", "done");
+    await until(() => finishGate !== undefined, "the gate to start");
+    expect(control?.skip(0)).toBe(true);
+    finishGate?.({ ok: true, output: "" });
+
+    const result = await done;
+    expect(result.value).toBeNull();
+    expect(agentEntries(result.progress).at(-1)).toMatchObject({ state: "error", skipped: true });
+  });
+
+  it("counts the output tokens of an attempt that was retried away", async () => {
+    const started: string[] = [];
+    const release = new Map<string, (r: WorkflowSpawnResult) => void>();
+    const host: WorkflowHost = {
+      spawnAgent(request) {
+        started.push(request.agentId);
+        return new Promise<WorkflowSpawnResult>(resolve => { release.set(request.agentId, resolve); });
+      },
+      abortAgent(agentId) {
+        release.get(agentId)?.({ ok: false, skipped: true, error: "Stopped.", outputTokens: 100 });
+      },
+    };
+    let control: WorkflowControl | undefined;
+    const done = run("await agent('one'); return budget.spent();", {
+      host,
+      onControl: c => { control = c; },
+    });
+
+    await until(() => started.length === 1, "the first attempt to start");
+    expect(control?.retry(0)).toBe(true);
+    await until(() => started.length === 2, "the second attempt to start");
+    release.get("wf-agent-0")?.({ ok: true, text: "x", outputTokens: 50 });
+
+    expect((await done).value).toBe(150);
   });
 
   it("skips an agent held at a pause without waiting for the resume", async () => {

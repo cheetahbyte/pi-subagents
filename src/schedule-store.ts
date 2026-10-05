@@ -10,7 +10,7 @@
  * from disk, applies the change, atomic-writes via temp+rename, releases.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ScheduledSubagent, ScheduleStoreData } from "./types.js";
 
@@ -30,13 +30,17 @@ function acquireLock(lockPath: string): void {
       if (e.code === "EEXIST") {
         try {
           const pid = parseInt(readFileSync(lockPath, "utf-8"), 10);
-          if (pid && !isProcessRunning(pid)) {
+          // A lock with no pid is either mid-write or left by a crash; only
+          // its age tells them apart.
+          const stale = pid
+            ? !isProcessRunning(pid)
+            : Date.now() - statSync(lockPath).mtimeMs > LOCK_RETRY_MS * LOCK_MAX_RETRIES;
+          if (stale) {
             unlinkSync(lockPath);
             continue;
           }
         } catch { /* ignore — try again */ }
-        const start = Date.now();
-        while (Date.now() - start < LOCK_RETRY_MS) { /* busy wait */ }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LOCK_RETRY_MS);
         continue;
       }
       throw e;
@@ -108,9 +112,9 @@ export class ScheduleStore {
   }
 
   /** Read-only check — uses the cache. */
-  hasName(name: string, exceptId?: string): boolean {
+  hasName(name: string): boolean {
     for (const j of this.jobs.values()) {
-      if (j.id !== exceptId && j.name === name) return true;
+      if (j.name === name) return true;
     }
     return false;
   }
@@ -142,12 +146,5 @@ export class ScheduleStore {
     // No-op fast path — see update().
     if (!this.jobs.has(id)) return false;
     return this.withLock(() => this.jobs.delete(id));
-  }
-
-  /** Delete the backing file (used when no jobs remain, optional cleanup). */
-  deleteFileIfEmpty(): void {
-    if (this.jobs.size === 0 && existsSync(this.filePath)) {
-      try { unlinkSync(this.filePath); } catch { /* ignore */ }
-    }
   }
 }

@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { SPINNER } from "../src/ui/agent-widget.js";
 import { styleWorkflowCardLines, type WorkflowCardTask } from "../src/ui/workflow-card.js";
 import {
-  ASCII_DIALOG_GLYPHS,
   DEFAULT_PANE_BODY_ROWS,
   dialogRowGlyph,
   handleWorkflowDialogKey,
@@ -11,7 +10,6 @@ import {
   layoutWorkflowDialog,
   MIN_PANE_BODY_ROWS,
   PROMPT_COLLAPSED_LINES,
-  plainWorkflowDialogLines,
   resolveWorkflowDialog,
   subStatusAnnotations,
   UNICODE_DIALOG_GLYPHS,
@@ -23,6 +21,7 @@ import {
 } from "../src/ui/workflow-dialog.js";
 import type { WorkflowMeta } from "../src/workflow/meta.js";
 import type { WorkflowAgentEntry, WorkflowEntry } from "../src/workflow/progress.js";
+import { plainWorkflowLines } from "./helpers/workflow-lines.js";
 
 const START = 1_000_000;
 
@@ -64,7 +63,7 @@ function input(over: DialogOverrides): WorkflowDialogInput {
 }
 
 const dialog = (over: DialogOverrides): string[] =>
-  plainWorkflowDialogLines(layoutWorkflowDialog(input(over)));
+  plainWorkflowLines(layoutWorkflowDialog(input(over)));
 
 const styled = (over: DialogOverrides): string[] =>
   styleWorkflowCardLines(layoutWorkflowDialog(input(over)), theme);
@@ -150,16 +149,14 @@ describe("dialog glyph mapping", () => {
     agentEntry({ index: 0, label: "done", state: "done" }),
     agentEntry({ index: 1, label: "failed", state: "error" }),
     agentEntry({ index: 2, label: "skipped", state: "error", skipped: true }),
-    agentEntry({ index: 3, label: "blocked", state: "error", blocked: true }),
-    agentEntry({ index: 4, label: "queued", state: "start", queuedAt: START }),
-    agentEntry({ index: 5, label: "running", state: "progress", startedAt: START }),
+    agentEntry({ index: 3, label: "queued", state: "start", queuedAt: START }),
+    agentEntry({ index: 4, label: "running", state: "start", startedAt: START }),
   ];
 
-  it("maps every one of the seven display states to its glyph and colour", () => {
+  it("maps every one of the six display states to its glyph and colour", () => {
     expect(dialogRowGlyph("done", UNICODE_DIALOG_GLYPHS)).toEqual({ text: "✔", color: "success" });
     expect(dialogRowGlyph("failed", UNICODE_DIALOG_GLYPHS)).toEqual({ text: "✘", color: "error" });
     expect(dialogRowGlyph("skipped", UNICODE_DIALOG_GLYPHS)).toEqual({ text: "✘", color: "dim" });
-    expect(dialogRowGlyph("blocked", UNICODE_DIALOG_GLYPHS)).toEqual({ text: "✘", color: "warning" });
     expect(dialogRowGlyph("queued", UNICODE_DIALOG_GLYPHS)).toEqual({ text: "◌", color: "dim" });
     expect(dialogRowGlyph("interrupted", UNICODE_DIALOG_GLYPHS)).toEqual({ text: "◌", color: "dim" });
     expect(dialogRowGlyph("running", UNICODE_DIALOG_GLYPHS, 3)).toEqual({ text: SPINNER[3], color: "dim" });
@@ -170,17 +167,15 @@ describe("dialog glyph mapping", () => {
     expect(rows[0]).toContain("✔ done");
     expect(rows[1]).toContain("✘ failed");
     expect(rows[2]).toContain("✘ skipped");
-    expect(rows[3]).toContain("✘ blocked");
-    // All four above are `state: "done" | "error"` inline; only the dialog
-    // splits the last three apart, and only it can draw ◌ for the queued row.
-    expect(rows[4]).toContain("◌ queued");
-    expect(rows[5]).toContain(`${SPINNER[0]} running`);
+    // All three above are `state: "done" | "error"` inline; only the dialog
+    // splits the last two apart, and only it can draw ◌ for the queued row.
+    expect(rows[3]).toContain("◌ queued");
+    expect(rows[4]).toContain(`${SPINNER[0]} running`);
   });
 
-  it("renders blocked distinctly from skipped despite sharing the cross", () => {
+  it("renders skipped distinctly from failed despite sharing the cross", () => {
     const lines = styled({ progress: live });
     expect(lines.find(l => l.includes("skipped"))).toContain("<dim>✘</dim>");
-    expect(lines.find(l => l.includes("blocked"))).toContain("<warning>✘</warning>");
     expect(lines.find(l => l.includes("failed"))).toContain("<error>✘</error>");
     expect(lines.find(l => l.includes(">done"))).toContain("<success>✔</success>");
   });
@@ -198,21 +193,11 @@ describe("dialog glyph mapping", () => {
   it("draws ◌ for an agent still live when the run stopped", () => {
     const rows = rightRows(
       dialog({
-        progress: [agentEntry({ index: 0, label: "cutoff", state: "progress", startedAt: START })],
+        progress: [agentEntry({ index: 0, label: "cutoff", state: "start", startedAt: START })],
         task: { status: "killed", startTime: START },
       }),
     );
     expect(rows[0]).toContain("◌ cutoff");
-  });
-
-  it("keeps an ASCII tier one column wide for every glyph", () => {
-    for (const key of ["tick", "cross", "queued", "pointer", "focus"] as const) {
-      expect(visibleWidth(ASCII_DIALOG_GLYPHS[key]), key).toBe(1);
-    }
-    const joined = dialog({ progress: live, ascii: true }).join("\n");
-    expect(joined).not.toMatch(/[✔✘◌❯▸]/);
-    expect(joined).toContain("√ done");
-    expect(joined).toContain("o queued");
   });
 });
 
@@ -293,8 +278,8 @@ describe("phases pane", () => {
 describe("state filter", () => {
   const progress: WorkflowEntry[] = [
     agentEntry({ index: 0, label: "one", state: "done" }),
-    agentEntry({ index: 1, label: "two", state: "progress", startedAt: START }),
-    agentEntry({ index: 2, label: "three", state: "progress", startedAt: START }),
+    agentEntry({ index: 1, label: "two", state: "start", startedAt: START }),
+    agentEntry({ index: 2, label: "three", state: "start", startedAt: START }),
   ];
 
   it("counts unfiltered agents with a plural that agrees", () => {
@@ -318,8 +303,8 @@ describe("state filter", () => {
   });
 
   it("reports a filter that matches nothing, and says so in the list", () => {
-    const lines = dialog({ progress, state: { filter: "blocked" } });
-    expect(paneTitles(lines).right).toBe("Phase 0 · 0 blocked");
+    const lines = dialog({ progress, state: { filter: "skipped" } });
+    expect(paneTitles(lines).right).toBe("Phase 0 · 0 skipped");
     expect(rightRows(lines).map(row => row.trim())).toEqual([WORKFLOW_DIALOG_COPY.noAgents]);
     expect(WORKFLOW_DIALOG_COPY.noAgents).toBe("No agents");
   });
@@ -340,17 +325,11 @@ describe("sub-status annotations", () => {
   it("renders the retry reason and attempt number from the entry", () => {
     expect(
       subStatusAnnotations(
-        agentEntry({ index: 0, attempt: 3, lastAttemptReason: "throttled" }),
+        agentEntry({ index: 0, attempt: 3, lastAttemptReason: "user-retry" }),
         "running",
         START,
       ),
-    ).toEqual(["throttled", "attempt 3"]);
-    expect(
-      subStatusAnnotations(agentEntry({ index: 0, lastAttemptReason: "user-retry" }), "running", START),
-    ).toEqual(["user retry"]);
-    expect(
-      subStatusAnnotations(agentEntry({ index: 0, lastAttemptReason: "stalled" }), "running", START),
-    ).toEqual(["stalled"]);
+    ).toEqual(["user retry", "attempt 3"]);
   });
 
   it("does not annotate a first attempt", () => {
@@ -379,7 +358,7 @@ describe("sub-status annotations", () => {
             state: "start",
             queuedAt: START,
             attempt: 2,
-            lastAttemptReason: "throttled",
+            lastAttemptReason: "user-retry",
             agentType: "Explore",
             toolCalls: 4,
           }),
@@ -390,7 +369,7 @@ describe("sub-status annotations", () => {
     // The agent type and the tool-call count are the detail pane's, not the
     // row's — the row carries why it looks the way it does, then the model and
     // the token count, and nothing that would push those off a narrow pane.
-    expect(rows[0].trim()).toBe("❯ ◌ retry-me · throttled · attempt 2 · waiting 8s");
+    expect(rows[0].trim()).toBe("❯ ◌ retry-me · user retry · attempt 2 · waiting 8s");
   });
 });
 
@@ -461,7 +440,7 @@ describe("per-agent detail", () => {
   });
 
   it("distinguishes no-tool-calls-yet from no-tool-calls-ever", () => {
-    const running = detail({ progress: [agentEntry({ index: 0, state: "progress", startedAt: START })] });
+    const running = detail({ progress: [agentEntry({ index: 0, state: "start", startedAt: START })] });
     expect(section(running, "Activity")).toEqual(["  No tool calls yet."]);
     const finished = detail({ progress: [agentEntry({ index: 0, state: "done" })] });
     expect(section(finished, "Activity")).toEqual(["  No tool calls."]);
@@ -483,12 +462,12 @@ describe("per-agent detail", () => {
 
     expect(outcome({ state: "error", skipped: true })).toEqual(["  Skipped by user."]);
     expect(outcome({ state: "error", error: "boom" })).toEqual(["  boom"]);
-    expect(outcome({ state: "error", blocked: true })).toEqual([`  ${WORKFLOW_DIALOG_COPY.noTranscript}`]);
+    expect(outcome({ state: "error" })).toEqual([`  ${WORKFLOW_DIALOG_COPY.noTranscript}`]);
     expect(outcome({ state: "done", resultPreview: "shipped" })).toEqual(["  shipped"]);
-    expect(outcome({ state: "progress", startedAt: START })).toEqual([
+    expect(outcome({ state: "start", startedAt: START })).toEqual([
       "  Not available yet (agent still running).",
     ]);
-    expect(outcome({ state: "progress", startedAt: START }, { status: "killed", startTime: START })).toEqual([
+    expect(outcome({ state: "start", startedAt: START }, { status: "killed", startTime: START })).toEqual([
       "  The workflow stopped before this agent finished.",
     ]);
   });
@@ -614,7 +593,7 @@ describe("keys", () => {
   const mixed: WorkflowEntry[] = [
     { type: "workflow_phase", index: 0, title: "Review" },
     agentEntry({ index: 0, label: "queued", phaseIndex: 0, state: "start", queuedAt: START }),
-    agentEntry({ index: 1, label: "running", phaseIndex: 0, state: "progress", queuedAt: START, startedAt: START }),
+    agentEntry({ index: 1, label: "running", phaseIndex: 0, state: "start", queuedAt: START, startedAt: START }),
     agentEntry({ index: 2, label: "done", phaseIndex: 0, state: "done" }),
   ];
   const pressMixed = (data: string, selectedAgent: number) => {
@@ -636,7 +615,7 @@ describe("keys", () => {
       agentEntry({ index: 0, label: "r0", phaseIndex: 0, state: "done" }),
       agentEntry({ index: 1, label: "r1", phaseIndex: 0, state: "done" }),
       agentEntry({ index: 2, label: "r2", phaseIndex: 0, state: "done" }),
-      agentEntry({ index: 3, label: "v0", phaseIndex: 1, state: "progress", queuedAt: START, startedAt: START }),
+      agentEntry({ index: 3, label: "v0", phaseIndex: 1, state: "start", queuedAt: START, startedAt: START }),
     ];
     const full = input({ progress: across, state: { level: "agent", selectedPhase: 1, selectedAgent: 0 } });
     const view = resolveWorkflowDialog(full);
@@ -675,7 +654,7 @@ describe("keys", () => {
     { type: "workflow_phase", index: 0, title: "Review" },
     agentEntry({ index: 0, label: "queued", phaseIndex: 0, state: "start", queuedAt: START }),
     agentEntry({
-      index: 1, label: "running", phaseIndex: 0, state: "progress",
+      index: 1, label: "running", phaseIndex: 0, state: "start",
       queuedAt: START, startedAt: START, recordId: "rec-1",
     }),
     agentEntry({ index: 2, label: "done", phaseIndex: 0, state: "done", recordId: "rec-2" }),
@@ -799,11 +778,6 @@ describe("frame height", () => {
   it("caps the detail pane when a long prompt is expanded", () => {
     expect(bodyHeight({ progress: longPrompt, state: expanded })).toBe(DEFAULT_PANE_BODY_ROWS);
   });
-
-  it("honours an explicit cap from the caller", () => {
-    expect(bodyHeight({ progress: longPrompt, state: expanded, bodyRows: 9 })).toBe(9);
-    expect(bodyHeight({ progress: phased(200), bodyRows: 9 })).toBe(9);
-  });
 });
 
 /* ------------------------------------------------------------------------- *
@@ -910,7 +884,7 @@ describe("WorkflowDialog component", () => {
 
   /** The same run with its only agent still going, so the per-agent keys apply. */
   const liveSource = () => ({
-    progress: [agentEntry({ index: 7, label: "only", state: "progress", queuedAt: START, startedAt: START })],
+    progress: [agentEntry({ index: 7, label: "only", state: "start", queuedAt: START, startedAt: START })],
     task: { status: "running" as const, workflowName: "wf", startTime: START },
   });
 
@@ -985,7 +959,7 @@ describe("WorkflowDialog component", () => {
 
 describe("key hints reflect the wired actions", () => {
   const live: WorkflowEntry[] = [
-    { type: "workflow_agent", index: 0, label: "a", phaseIndex: 0, state: "progress", startedAt: START },
+    { type: "workflow_agent", index: 0, label: "a", phaseIndex: 0, state: "start", startedAt: START },
   ];
   // Wide enough that the footer is never clipped — these assert which hints are
   // present, not how they truncate (that is covered by the width tests).
@@ -1046,7 +1020,7 @@ describe("key hints reflect the wired actions", () => {
 
   it("advertises the conversation key on a row that has a record", () => {
     const openable: WorkflowEntry[] = [
-      { type: "workflow_agent", index: 0, label: "a", phaseIndex: 0, state: "progress", startedAt: START, recordId: "rec-1" },
+      { type: "workflow_agent", index: 0, label: "a", phaseIndex: 0, state: "start", startedAt: START, recordId: "rec-1" },
     ];
     // Both levels, matching where the key works.
     expect(agentHints({ progress: openable })).toContain("c convo");
@@ -1068,7 +1042,7 @@ describe("key hints reflect the wired actions", () => {
   /** Every per-agent key live at once: running, openable, long enough prompt. */
   const everyKey: WorkflowEntry[] = [
     {
-      type: "workflow_agent", index: 0, label: "a", phaseIndex: 0, state: "progress",
+      type: "workflow_agent", index: 0, label: "a", phaseIndex: 0, state: "start",
       startedAt: START, recordId: "rec-1",
       promptPreview: Array.from({ length: PROMPT_COLLAPSED_LINES + 2 }, (_, i) => `line ${i}`).join("\n"),
     },
@@ -1109,7 +1083,7 @@ describe("component availability", () => {
   const tui = { requestRender: () => {} } as unknown as never;
   const liveSource = () => ({
     progress: [
-      { type: "workflow_agent", index: 0, label: "a", phaseIndex: 0, state: "progress", startedAt: START },
+      { type: "workflow_agent", index: 0, label: "a", phaseIndex: 0, state: "start", startedAt: START },
     ] as WorkflowEntry[],
     task: { status: "running", workflowName: "wf", startTime: START } as WorkflowCardTask,
   });

@@ -37,13 +37,13 @@ const MAX_SCHEMA_BYTES = 64 * 1024;
 const MAX_REPORTED_ERRORS = 5;
 
 export interface CompiledSchema {
-  /** The schema as given, for the tool's `parameters` and the journal key. */
+  /** The schema as given, for the tool's `parameters`. */
   readonly schema: Record<string, unknown>;
   /** `true`, or a human-readable account of what is wrong. */
   check(value: unknown): true | string;
 }
 
-export type SchemaCompilation =
+type SchemaCompilation =
   | { ok: true; compiled: CompiledSchema }
   | { ok: false; message: string };
 

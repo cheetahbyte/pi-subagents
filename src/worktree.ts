@@ -3,7 +3,8 @@
  *
  * Creates a temporary git worktree so the agent works on an isolated copy of the repo.
  * On completion, if no changes were made, the worktree is cleaned up.
- * If changes exist, a branch is created and returned in the result.
+ * If changes exist, a branch is created and returned in the result; if they
+ * cannot be committed to one, the worktree is kept and its path returned.
  *
  * Every git call goes through `pi.exec` (async) rather than `execFileSync`: a
  * worktree copy can take seconds, and a session that spawns several isolated
@@ -16,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-export interface WorktreeInfo {
+interface WorktreeInfo {
   /** Absolute path to the worktree directory (the copied repo's root). */
   path: string;
   /** Branch name created for this worktree (if changes exist). */
@@ -52,12 +53,12 @@ export function isWorktreeIsolationEnabled(): boolean {
   return worktreeIsolationEnabled;
 }
 
-export interface WorktreeCleanupResult {
+interface WorktreeCleanupResult {
   /** Whether changes were found in the worktree. */
   hasChanges: boolean;
   /** Branch name if changes were committed. */
   branch?: string;
-  /** Worktree path if it was kept. */
+  /** Set only when the changes could not be committed: the worktree was kept here. */
   path?: string;
 }
 
@@ -92,8 +93,7 @@ export async function createWorktree(
   let subdir: string;
   try {
     let topLevel: string;
-    [, baseSha, topLevel] = await Promise.all([
-      git(pi, cwd, ["rev-parse", "--is-inside-work-tree"], 5000),
+    [baseSha, topLevel] = await Promise.all([
       git(pi, cwd, ["rev-parse", "HEAD"], 5000),
       git(pi, cwd, ["rev-parse", "--show-toplevel"], 5000),
     ]);
@@ -124,6 +124,7 @@ export async function createWorktree(
  * Clean up a worktree after agent completion.
  * - If no changes: remove worktree entirely.
  * - If changes exist: create a branch, commit changes, return branch info.
+ * - If git fails at any step: keep the worktree and return its path.
  */
 export async function cleanupWorktree(
   pi: ExtensionAPI,
@@ -158,29 +159,23 @@ export async function cleanupWorktree(
 
     // Create a branch pointing to the worktree's HEAD.
     // If the branch already exists, append a suffix to avoid overwriting previous work.
-    let branchName = worktree.branch;
+    let branch = worktree.branch;
     try {
-      await git(pi, worktree.path, ["branch", branchName], 5000);
+      await git(pi, worktree.path, ["branch", branch], 5000);
     } catch {
       // Branch already exists — use a unique suffix
-      branchName = `${worktree.branch}-${Date.now()}`;
-      await git(pi, worktree.path, ["branch", branchName], 5000);
+      branch = `${worktree.branch}-${Date.now()}`;
+      await git(pi, worktree.path, ["branch", branch], 5000);
     }
-    // Update branch name in worktree info for the caller
-    worktree.branch = branchName;
 
     // Remove the worktree (branch persists in main repo)
     await removeWorktree(pi, cwd, worktree.path);
 
-    return {
-      hasChanges: true,
-      branch: worktree.branch,
-      path: worktree.path,
-    };
+    return { hasChanges: true, branch };
   } catch {
-    // Best effort cleanup on error
-    try { await removeWorktree(pi, cwd, worktree.path); } catch { /* ignore */ }
-    return { hasChanges: false };
+    // Git failed before the worktree was shown clean or its work reached a
+    // branch, so removing it now could delete the only copy.
+    return { hasChanges: true, path: worktree.path };
   }
 }
 

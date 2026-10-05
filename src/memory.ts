@@ -45,7 +45,6 @@ export function isSymlink(filePath: string): boolean {
  * Returns undefined if the file doesn't exist, is a symlink, or can't be read.
  */
 export function safeReadFile(filePath: string): string | undefined {
-  if (!existsSync(filePath)) return undefined;
   if (isSymlink(filePath)) return undefined;
   try {
     return readFileSync(filePath, "utf-8");
@@ -83,8 +82,8 @@ export function resolveMemoryDir(agentName: string, scope: MemoryScope, cwd: str
 
 /**
  * Ensure the memory directory exists, creating it if needed.
- * Refuses to create directories if any component in the path is a symlink
- * to prevent symlink-based directory traversal attacks.
+ * Refuses an existing directory that is itself a symlink. Parent components
+ * are not checked: a symlinked ancestor is followed.
  */
 export function ensureMemoryDir(memoryDir: string): void {
   // If the directory already exists, verify it's not a symlink

@@ -910,9 +910,10 @@ Set `isolation: worktree` to run an agent in a temporary git worktree:
 Agent({ subagent_type: "refactor", prompt: "...", isolation: "worktree" })
 ```
 
-The agent gets a full, isolated copy of the repository. The worktree directory is removed on completion either way — what differs is whether a branch is left behind:
+The agent gets a full, isolated copy of the repository. The worktree directory is removed on completion unless its changes could not be saved — what differs is whether a branch is left behind:
 - **No changes:** worktree is cleaned up automatically, no branch
 - **Changes made:** changes are committed to a new branch (`pi-agent-<id>`), and the result names the branch and the `git merge` command for it. The branch is the only artifact — the worktree path is gone, so nothing points into it
+- **Changes could not be committed:** if a git step fails during cleanup, the worktree is kept and the result names its path, so the work is not lost
 - **Agent committed its own work:** the branch is created at the agent's HEAD, preserving its commits (uncommitted leftovers are committed on top first)
 
 The agent's system prompt names the worktree as an isolated copy and tells it to work only there, even if other instructions name the main checkout — otherwise an inherited parent prompt or a task prompt mentioning the project path walks it straight back out of the copy. This is a directive, not a sandbox: an agent with shell access can still `cd` out, so don't rely on `isolation` alone to protect the main checkout.
@@ -1003,11 +1004,14 @@ src/
   agent-runner.ts     # Session creation, execution, graceful max_turns, steer/resume
   agent-manager.ts    # Agent lifecycle, concurrency queue, completion notifications
   nested-tools.ts     # Delegation tools handed to subagents (nested spawn/collect/steer)
+  agent-question-tools.ts # Child↔parent question round trip (ask/answer tools)
+  structured-output.ts # Synthetic StructuredOutput tool behind `agent(prompt, { schema })`
   child-context.ts    # AsyncLocalStorage flag marking work done for a child session
   abortable.ts        # Race a wait against Esc without cancelling the background child
   group-join.ts       # Group join manager: batched completion notifications with timeout
   status-note.ts      # Honest status note + salvaged partial output for non-normal outcomes
-  usage.ts            # Token usage shapes, accumulators, session-stats readers
+  usage.ts            # Token usage shapes, accumulators, context-usage reader
+  xml.ts              # XML escaping for `<task-notification>` payloads
 
   # Invocation surface
   invocation-config.ts # Shared tool-parameter schemas (isolation, join, thinking, ...)
@@ -1041,6 +1045,11 @@ src/
     host.ts           # WorkflowHost adapter over AgentManager
     task.ts           # local_workflow task record and batched progress updates
     tool-description.ts # Model-facing description carrying the orchestration patterns
+    json-schema.ts    # Validate a script-supplied JSON Schema (`agent(prompt, { schema })`)
+    saved.ts          # Resolve `SubagentWorkflow({ name })` to a saved script on disk
+    journal.ts        # Per-run record that lets a re-run skip finished work
+    entry.ts          # Session-entry snapshot a finished workflow leaves in the transcript
+    collisions.ts     # Yield or stay when another extension already offers a workflow tool
   ui/
     agent-widget.ts       # Persistent widget: spinners, activity, status icons, theming
     conversation-viewer.ts # Live conversation overlay for viewing agent sessions
@@ -1050,6 +1059,7 @@ src/
     select-item.ts        # Collision-safe ctx.ui.select wrapper (numbered rows)
     workflow-card.ts      # Inline workflow card (tool result and session entry)
     workflow-dialog.ts    # /agents → Workflows two-pane inspector
+    workflow-menu.ts      # /agents → Workflows submenu and the run inspector overlay
 ```
 
 ## License

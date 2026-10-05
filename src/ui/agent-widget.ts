@@ -22,7 +22,7 @@ const MAX_WIDGET_LINES = 12;
 export const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /** Statuses that indicate an error/non-success outcome (used for linger behavior and icon rendering). */
-export const ERROR_STATUSES = new Set(["error", "aborted", "steered", "stopped"]);
+const ERROR_STATUSES = new Set(["error", "aborted", "steered", "stopped"]);
 
 /** Tool name → human-readable action for activity descriptions. */
 const TOOL_DISPLAY: Record<string, string> = {
@@ -312,6 +312,20 @@ export class AgentWidget {
     }
   }
 
+  /** The widget's agents, split into the three kinds of row it draws. */
+  private classify() {
+    const agents = this.widgetAgents();
+    return {
+      agents,
+      running: agents.filter(a => a.status === "running"),
+      queued: agents.filter(a => a.status === "queued"),
+      finished: agents.filter(a =>
+        a.status !== "running" && a.status !== "queued" && a.completedAt
+        && this.shouldShowFinished(a.id, a.status),
+      ),
+    };
+  }
+
   /** Set the UI context (grabbed from first tool execution). */
   setUICtx(ctx: UICtx) {
     if (ctx !== this.uiCtx) {
@@ -415,13 +429,7 @@ export class AgentWidget {
    * reading live state each time instead of capturing it in a closure.
    */
   private renderWidget(tui: any, theme: Theme): string[] {
-    const allAgents = this.widgetAgents();
-    const running = allAgents.filter(a => a.status === "running");
-    const queued = allAgents.filter(a => a.status === "queued");
-    const finished = allAgents.filter(a =>
-      a.status !== "running" && a.status !== "queued" && a.completedAt
-      && this.shouldShowFinished(a.id, a.status),
-    );
+    const { running, queued, finished } = this.classify();
 
     const hasActive = running.length > 0 || queued.length > 0;
     const hasFinished = finished.length > 0;
@@ -500,35 +508,27 @@ export class AgentWidget {
       if (queuedLine) lines.push(queuedLine);
 
       // Fix last connector: swap ├─ → └─ and │ → space for activity lines.
-      if (lines.length > 1) {
-        const last = lines.length - 1;
-        lines[last] = lines[last].replace("├─", "└─");
-        // If last item is a running agent activity line, fix indent of that line
-        // and fix the header line above it.
-        if (runningLines.length > 0 && !queuedLine) {
-          // The last two lines are the last running agent's header + activity.
-          if (last >= 2) {
-            lines[last - 1] = lines[last - 1].replace("├─", "└─");
-            lines[last] = lines[last].replace("│  ", "   ");
-          }
-        }
+      const last = lines.length - 1;
+      lines[last] = lines[last].replace("├─", "└─");
+      // If last item is a running agent activity line, fix indent of that line
+      // and fix the header line above it.
+      if (runningLines.length > 0 && !queuedLine) {
+        lines[last - 1] = lines[last - 1].replace("├─", "└─");
+        lines[last] = lines[last].replace("│  ", "   ");
       }
     } else {
       // Overflow — prioritize: running > queued > finished.
-      // Reserve 1 line for overflow indicator.
-      let budget = maxBody - 1;
       let hiddenRunning = 0;
       let hiddenFinished = 0;
 
-      // Reserve the queued line's row up front. It is a single summary of N
-      // waiting agents, so it cannot be folded into the "+N more" count (which
+      // Reserve 1 line for the overflow indicator, and the queued line's row up
+      // front. It is a single summary of N waiting agents, so it cannot be folded into the "+N more" count (which
       // is denominated in agents) without either under-reporting it as 1 or
       // inflating the total with agents that were never getting their own rows.
       // Reserving costs at most one running agent — which IS counted below —
       // and makes the drop unreachable. It matters most exactly when it used to
       // vanish: the pool is saturated and the queue is what the user needs to see.
-      const queuedReserve = queuedLine ? 1 : 0;
-      budget -= queuedReserve;
+      let budget = maxBody - 1 - (queuedLine ? 1 : 0);
 
       // 1. Running agents (2 lines each)
       for (const pair of runningLines) {
@@ -541,11 +541,7 @@ export class AgentWidget {
       }
 
       // 2. Queued line (always fits — its row was reserved above)
-      if (queuedLine) {
-        budget += queuedReserve;
-        lines.push(queuedLine);
-        budget--;
-      }
+      if (queuedLine) lines.push(queuedLine);
 
       // 3. Finished agents
       for (const fl of finishedLines) {
@@ -572,17 +568,10 @@ export class AgentWidget {
   /** Force an immediate widget update. */
   update() {
     if (!this.uiCtx) return;
-    const allAgents = this.widgetAgents();
-
-    // Lightweight existence checks — full categorization happens in renderWidget()
-    let runningCount = 0;
-    let queuedCount = 0;
-    let hasFinished = false;
-    for (const a of allAgents) {
-      if (a.status === "running") { runningCount++; }
-      else if (a.status === "queued") { queuedCount++; }
-      else if (a.completedAt && this.shouldShowFinished(a.id, a.status)) { hasFinished = true; }
-    }
+    const { agents: allAgents, running, queued, finished } = this.classify();
+    const runningCount = running.length;
+    const queuedCount = queued.length;
+    const hasFinished = finished.length > 0;
     const hasActive = runningCount > 0 || queuedCount > 0;
 
     // Nothing to show — clear widget

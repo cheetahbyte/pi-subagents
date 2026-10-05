@@ -1,4 +1,4 @@
-/** usage.ts — Token usage: shapes, accumulator operators, session-stats readers. */
+/** usage.ts — Token usage: shapes, accumulator operators, context-usage reader. */
 
 /**
  * Lifetime usage components, accumulated via `message_end` events. Survives
@@ -59,7 +59,7 @@ export function addUsage(into: LifetimeUsage, delta: LifetimeUsage): void {
  * `AgentToolResult.usage` and the `subagents:completed` / `subagents:failed`
  * events — carry this, and gain whatever pi adds to `Usage` for free.
  */
-export type ReportedUsage = {
+type ReportedUsage = {
   input: number;
   output: number;
   cacheRead: number;
@@ -107,11 +107,9 @@ export function toReportedUsage(u: LifetimeUsage): ReportedUsage | undefined {
  */
 export class PendingUsagePool {
   private pending: LifetimeUsage = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0 };
-  private dirty = false;
 
   add(delta: LifetimeUsage): void {
     addUsage(this.pending, delta);
-    this.dirty = true;
   }
 
   /**
@@ -120,43 +118,15 @@ export class PendingUsagePool {
    * result untouched rather than attaching a zero.
    */
   drain(): ReportedUsage | undefined {
-    if (!this.dirty) return undefined;
     const drained = toReportedUsage(this.pending);
     this.pending = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0 };
-    this.dirty = false;
     return drained;
   }
 }
 
-/** Minimal shape we read from upstream `getSessionStats()`. */
-export type SessionStatsLike = {
-  tokens: { input: number; output: number; cacheWrite: number };
-};
 export type SessionLike = {
-  getSessionStats(): SessionStatsLike;
   getContextUsage(): { percent: number | null } | undefined;
 };
-
-/**
- * Session-scoped token count: input + output + cacheWrite as reported by
- * upstream `getSessionStats().tokens` for the *current* session window.
- *
- * RESETS at compaction — upstream replaces `session.state.messages` and the
- * stats are derived from that array. For a lifetime total that survives
- * compaction, use `getLifetimeTotal(lifetimeUsage)` instead, which reads
- * from an independent accumulator fed by `message_end` events.
- *
- * Avoids upstream's `tokens.total` field, which sums per-turn `cacheRead`
- * and so counts the cumulative cached prefix N times across N turns
- * (issue #38).
- */
-export function getSessionTokens(session: SessionLike | undefined): number {
-  if (!session) return 0;
-  try {
-    const t = session.getSessionStats().tokens;
-    return t.input + t.output + t.cacheWrite;
-  } catch { return 0; }
-}
 
 /**
  * Context-window utilization (0–100), or null when unavailable

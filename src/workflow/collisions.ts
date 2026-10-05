@@ -63,7 +63,7 @@ export interface RegisteredToolInfo {
   sourceInfo?: { source?: string };
 }
 
-export type WorkflowCollision =
+type WorkflowCollision =
   /** Nobody else is offering one. Carry on. */
   | { kind: "none" }
   /**

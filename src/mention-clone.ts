@@ -71,9 +71,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { runInChildSessionContext } from "./child-context.js";
 import { agentMentionReminder } from "./mention.js";
-import type { SubagentType, ThinkingLevel } from "./types.js";
+import type { SubagentType } from "./types.js";
 
-export interface MentionCloneOptions {
+interface MentionCloneOptions {
   /** The MAIN session's context — what the spawn is attributed to, and the
    * source of the conversation, whose leading system message carries the
    * prompt. */
@@ -86,7 +86,7 @@ export interface MentionCloneOptions {
   agentTool: ToolDefinition;
 }
 
-export interface MentionCloneResult {
+interface MentionCloneResult {
   /** True once the clone actually called `Agent`. */
   spawned: boolean;
   /** Why not, when it didn't. Absent on success. */
@@ -133,9 +133,8 @@ export async function runMentionClone(opts: MentionCloneOptions): Promise<Mentio
 
   let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
   try {
-    // Pi 0.80.8 moved createAgentSession from modelRegistry to modelRuntime;
-    // agent-runner.ts carries the same shim for the same reason — pass both so
-    // the clone keeps the parent's providers across the supported range.
+    // createAgentSession takes the runtime, but ExtensionContext exposes only
+    // the registry facade over it — same reach-through as agent-runner.ts.
     const parentModelRuntime = (ctx.modelRegistry as unknown as { runtime?: unknown }).runtime;
     // The conversation as the main session resolves it: compaction applied,
     // branch summaries substituted.
@@ -143,10 +142,7 @@ export async function runMentionClone(opts: MentionCloneOptions): Promise<Mentio
       ctx.sessionManager.getEntries(),
       ctx.sessionManager.getLeafId(),
     );
-    // Pi 0.82.0 added this; below it the field is absent and the clone takes
-    // the settings level instead, which is what a session that never ran
-    // `/think` is on anyway. Same shim shape as `modelRuntime` below.
-    const thinkingLevel = (ctx as { thinkingLevel?: ThinkingLevel }).thinkingLevel;
+    const { thinkingLevel } = ctx;
     const created = await runInChildSessionContext(() =>
       createAgentSession({
         cwd: ctx.cwd,
@@ -155,7 +151,6 @@ export async function runMentionClone(opts: MentionCloneOptions): Promise<Mentio
         sessionManager: SessionManager.inMemory(ctx.cwd),
         model: ctx.model as Model<never> | undefined,
         ...(thinkingLevel && { thinkingLevel }),
-        modelRegistry: ctx.modelRegistry,
         ...(parentModelRuntime !== undefined && { modelRuntime: parentModelRuntime as never }),
         // An allowlist naming exactly the clone's own tool. NOT `noTools:
         // "all"`, whose doc comment ("start with no tools enabled") reads like
@@ -167,7 +162,7 @@ export async function runMentionClone(opts: MentionCloneOptions): Promise<Mentio
         // agent-runner's `tools: sessionTools` beside its nested `customTools`.
         tools: [cloneAgentTool.name],
         customTools: [cloneAgentTool],
-      } as Parameters<typeof createAgentSession>[0]),
+      }),
     );
     session = created.session;
 
